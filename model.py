@@ -15,7 +15,7 @@ class Users(SQLModel, table=True):
     userid: Optional[int] = Field(default=None, primary_key=True)
     username: str = Field(index=True)
     password: str
-    realname: str
+    realname: str = Field(default="")  # 已停用：注册不再采集姓名，保留列兼容老数据
     createtime: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 

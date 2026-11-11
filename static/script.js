@@ -27,7 +27,7 @@ function requireLogin() {
             return;
         }
         renderAuthBox(
-            '你好，' + data["realname"] +
+            '你好，' + data["username"] +
             '&nbsp;<button class="auth-btn" onclick="doLogout()">退出登录</button>'
         );
     })
@@ -48,7 +48,7 @@ function doLogin() {
     .then(data => {
         if (data["message"] === "login-ok") {
             localStorage.setItem("token", data["token"]);
-            localStorage.setItem("realname", data["realname"]);
+            localStorage.setItem("username", data["username"]);
             location.href = "/";
         }
         else if (data["message"] === "user-not-exist") {
