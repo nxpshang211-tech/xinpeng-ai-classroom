@@ -34,18 +34,19 @@
     <div class="exam-box">
         <!--遍历每一道题目，并显示到前端页面中-->
         {% for exam in exams %}
-        <!--如果是单选题，则需要使用radio显示一个单选按钮用于作答-->
+        {% set diff_names = {1: "易", 2: "中", 3: "难"} %}
+        <!--单选题：radio 一组，name 保持一致才能互斥-->
         {% if exam.type == 'choice' %}
         <div class="choice-box" id="q-{{exam.examid}}">
             <div class="question">
-                第{{loop.index}}题：{{exam.question}}
+                第{{loop.index}}题【单选·{{exam.score}}分】：{{exam.question}}
                 <span class="kp-tag">{{exam.knowledge_point}}</span>
+                <span class="kp-tag">难度：{{diff_names.get(exam.difficulty, "中")}}</span>
                 <label class="mark-tag"><input type="checkbox" id="mark-{{exam.examid}}"
                     onchange="toggleMark('{{videoid}}', {{exam.examid}}, this.checked)">标记</label>
             </div>
             <div class="options">
                 {% for k, v in exam.options.items() %}
-                    <!--单选按钮中一组按钮的name属性必须保持一致，才能正常单选-->
                     <!--单选框的值格式为choice-2-C，选中时其值将会作为答案提交到后端，后端split后获取-->
                     <input type="radio" name="choice-{{exam.examid}}" value="choice-{{exam.examid}}-{{k}}">
                     {{k}}：{{v}} &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
@@ -56,38 +57,45 @@
                 <span class="judge-result" id="judge-{{exam.examid}}"></span>
             </div>
         </div>
-        <!--填空题：单行输入框-->
-        {% elif exam.type == 'blank' %}
-        <div class="blank-box" id="q-{{exam.examid}}">
+        <!--多选题：checkbox 组，漏选半分、错选零分-->
+        {% elif exam.type == 'multi' %}
+        <div class="multi-box" id="q-{{exam.examid}}">
             <div class="question">
-                第{{loop.index}}题：{{exam.question}}
+                第{{loop.index}}题【多选·{{exam.score}}分·漏选半分】：{{exam.question}}
                 <span class="kp-tag">{{exam.knowledge_point}}</span>
+                <span class="kp-tag">难度：{{diff_names.get(exam.difficulty, "中")}}</span>
                 <label class="mark-tag"><input type="checkbox" id="mark-{{exam.examid}}"
                     onchange="toggleMark('{{videoid}}', {{exam.examid}}, this.checked)">标记</label>
             </div>
-            <div class="answer">
-                <input type="text" class="blank-input" id="blank-{{exam.examid}}" placeholder="请输入答案">
+            <div class="options">
+                {% for k, v in exam.options.items() %}
+                    <input type="checkbox" name="multi-{{exam.examid}}" value="multi-{{exam.examid}}-{{k}}">
+                    {{k}}：{{v}} &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+                {% endfor %}
             </div>
             <div class="judge-line">
-                <button type="button" onclick="judgeOne('{{videoid}}', {{exam.examid}}, 'blank')">立即判分</button>
+                <button type="button" onclick="judgeOne('{{videoid}}', {{exam.examid}}, 'multi')">立即判分</button>
                 <span class="judge-result" id="judge-{{exam.examid}}"></span>
             </div>
         </div>
-        <!--如果是简答题，则显示题目和一个textarea用于作答-->
-        {% elif exam.type == 'qa' %}
-         <div class="qa-box" id="q-{{exam.examid}}">
+        <!--判断题：radio 二选一，答案 T/F-->
+        {% elif exam.type == 'judge' %}
+        <div class="judge-box" id="q-{{exam.examid}}">
             <div class="question">
-                第{{loop.index}}题：{{exam.question}}
+                第{{loop.index}}题【判断·{{exam.score}}分】：{{exam.question}}
                 <span class="kp-tag">{{exam.knowledge_point}}</span>
+                <span class="kp-tag">难度：{{diff_names.get(exam.difficulty, "中")}}</span>
                 <label class="mark-tag"><input type="checkbox" id="mark-{{exam.examid}}"
                     onchange="toggleMark('{{videoid}}', {{exam.examid}}, this.checked)">标记</label>
             </div>
-            <div class="answer">
-                <!--以qa-10这种格式作为ID，可以解析出题目的编号，以对应数据表的ID-->
-                <textarea class="answer-input" id="qa-{{exam.examid}}"></textarea>
+            <div class="options">
+                <input type="radio" name="judge-{{exam.examid}}" value="judge-{{exam.examid}}-T">
+                正确 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+                <input type="radio" name="judge-{{exam.examid}}" value="judge-{{exam.examid}}-F">
+                错误
             </div>
             <div class="judge-line">
-                <button type="button" onclick="judgeOne('{{videoid}}', {{exam.examid}}, 'qa')">立即判分</button>
+                <button type="button" onclick="judgeOne('{{videoid}}', {{exam.examid}}, 'judge')">立即判分</button>
                 <span class="judge-result" id="judge-{{exam.examid}}"></span>
             </div>
         </div>

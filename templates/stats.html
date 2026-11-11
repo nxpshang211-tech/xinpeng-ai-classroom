@@ -24,6 +24,11 @@
     <div class="panel" id="stats-summary">加载中...</div>
 
     <div class="panel">
+        <h3>待复习错题的错因分布</h3>
+        <div id="reason-box">暂无数据</div>
+    </div>
+
+    <div class="panel">
         <h3>知识点掌握情况</h3>
         <table>
             <thead><tr><td>知识点</td><td>答题数</td><td>答对</td><td>正确率</td></tr></thead>
@@ -48,7 +53,7 @@
     </div>
 
     <script>
-        const TYPE_NAMES = {choice: "选择题", blank: "填空题", qa: "简答题"};
+        const TYPE_NAMES = {choice: "单选题", multi: "多选题", judge: "判断题"};
         const MODE_NAMES = {exam: "整卷练习", redo: "错题重练"};
 
         function accuracyBar(accuracy) {
@@ -72,9 +77,18 @@
                     const s = data.summary;
                     document.getElementById("stats-summary").innerHTML =
                         `累计答题 <b>${s.total_answers}</b> 道 ｜ ` +
-                        `总正确率 <b>${Math.round(s.accuracy * 100)}%</b> ｜ ` +
+                        `首答正确率 <b>${Math.round(s.first_accuracy * 100)}%</b>（${s.first_answers} 道）｜ ` +
+                        `含重做正确率 <b>${Math.round(s.overall_accuracy * 100)}%</b> ｜ ` +
                         `累计用时 <b>${formatDuration(s.total_duration_seconds)}</b> ｜ ` +
                         `待复习错题 <b>${s.pending_wrong}</b> 道`;
+
+                    const reasons = data.by_wrong_reason || [];
+                    const maxCount = Math.max(1, ...reasons.map(r => r.count));
+                    document.getElementById("reason-box").innerHTML =
+                        reasons.map(item => {
+                            const blocks = Math.round(item.count / maxCount * 10);
+                            return `<div>${item.reason}：${"█".repeat(blocks)} ${item.count} 题</div>`;
+                        }).join("") || "暂无数据";
 
                     document.getElementById("kp-tbody").innerHTML =
                         data.by_knowledge_point.map(item =>

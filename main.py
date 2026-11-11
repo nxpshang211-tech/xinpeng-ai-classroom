@@ -28,11 +28,12 @@ from model import (
     init_database,
 )
 from module import (
+    MAX_ANALYSIS_LEN,
+    MAX_OPTION_LEN,
+    MAX_QUESTION_LEN,
     aes_encrypt,
-    ai_score,
     check_token,
-    gen_wrong_analysis,
-    grade_blank,
+    gen_wrong_reason,
     process_video,
     retry_incomplete_videos,
 )
@@ -279,6 +280,7 @@ def exam(request: Request, videoid: int):
                 "score": item.score,
                 "options": json.loads(item.options) if item.options else None,
                 "knowledge_point": item.knowledge_point or "综合",
+                "difficulty": item.difficulty or 2,
             }
         )
     return templates.TemplateResponse(
@@ -349,19 +351,24 @@ def get_draft(videoid: int, token: str):
 
 
 def _is_correct(exam: Exams, score: int) -> bool:
-    """choice/blank 以得分>0 判对；qa 以得分率>=60% 判对。"""
-    if exam.type == "qa":
-        return score >= exam.score * 0.6
-    return score > 0
+    """客观题统一口径：拿满该题分值才算答对（多选漏选半分仍计错题）。"""
+    return score == exam.score
 
 
 def _judge_one(exam: Exams, user_answer: str) -> int:
     if exam.type == "choice":
-        return exam.score if exam.answer == user_answer else 0
-    if exam.type == "blank":
-        alts = json.loads(exam.alt_answers) if exam.alt_answers else []
-        return exam.score if grade_blank(user_answer, exam.answer, alts) else 0
-    return ai_score(user_answer, exam.question, exam.answer)
+        return exam.score if exam.answer == str(user_answer).upper()[:1] else 0
+    if exam.type == "multi":
+        picked = "".join(sorted(set(str(user_answer).upper()) & set("ABCD")))
+        standard = "".join(sorted(exam.answer))
+        if picked == standard:
+            return exam.score
+        if settings.multi_partial_credit and picked and set(picked) < set(standard):
+            return exam.score // 2  # 漏选半分
+        return 0  # 错选/未选零分
+    if exam.type == "judge":
+        return exam.score if str(user_answer).upper()[:1] == exam.answer else 0
+    return 0
 
 
 @app.post("/exam/submit/{videoid}/{token}")
@@ -388,27 +395,18 @@ def exam_submit(videoid: int, token: str, answers: dict = Body()):
 
     for encoded in answers.get("choices", []):
         try:
-            _, examid_text, answer = encoded.split("-", 2)
+            prefix, examid_text, answer = encoded.split("-", 2)
             examid = int(examid_text)
         except (ValueError, AttributeError):
-            raise HTTPException(status_code=400, detail="选择题答案格式错误")
+            raise HTTPException(status_code=400, detail="答案格式错误")
         question = by_id.get(examid)
-        if question is None or question.type != "choice":
-            raise HTTPException(status_code=400, detail=f"选择题不存在：{examid}")
+        if (
+            prefix not in ("choice", "multi", "judge")
+            or question is None
+            or question.type != prefix
+        ):
+            raise HTTPException(status_code=400, detail=f"题目不存在或题型不符：{examid}")
         parsed[examid] = answer
-
-    for key, answer in answers.items():
-        if key in ("choices", "mode", "duration_seconds"):
-            continue
-        try:
-            prefix, examid_text = key.split("-", 1)
-            examid = int(examid_text)
-        except (ValueError, AttributeError):
-            raise HTTPException(status_code=400, detail="主观题答案格式错误")
-        question = by_id.get(examid)
-        if prefix not in ("qa", "blank") or question is None or question.type != prefix:
-            raise HTTPException(status_code=400, detail=f"题目不存在：{key}")
-        parsed[examid] = str(answer)
 
     if mode != "redo":
         expected_ids = {exam.examid for exam in exams}
@@ -456,11 +454,13 @@ def exam_submit(videoid: int, token: str, answers: dict = Body()):
                         examid=item["examid"],
                         answer=item["user_answer"],
                         score=item["score"],
+                        mode=mode,
                     )
                 )
             else:  # redo 模式：覆盖旧成绩
                 row.answer = item["user_answer"]
                 row.score = item["score"]
+                row.mode = mode
                 session.add(row)
             # 最终答案同步落定为草稿，便于提交后回显
             draft = session.exec(
@@ -477,7 +477,7 @@ def exam_submit(videoid: int, token: str, answers: dict = Body()):
                 draft.updated_at = datetime.now(timezone.utc)
                 session.add(draft)
 
-        # 错题收录 / 重练答对自动标记掌握
+        # 错题收录：答错（含多选漏选半分）即入错题本，错因清空待异步重出
         for question, user_answer in wrong_items:
             row = session.exec(
                 select(WrongBook).where(
@@ -493,24 +493,33 @@ def exam_submit(videoid: int, token: str, answers: dict = Body()):
                         wrong_count=1,
                         mastered=False,
                         last_answer=user_answer,
+                        correct_streak=0,
                     )
                 )
             else:
                 row.wrong_count += 1
                 row.mastered = False
+                row.correct_streak = 0
                 row.last_answer = user_answer
+                row.wrong_reason = None
+                row.wrong_analysis = None
                 row.updated_at = datetime.now(timezone.utc)
                 session.add(row)
         if mode == "redo":
+            # 重练答对：连续答对计数 +1，达 2 次自动标记已掌握
             correct_examids = {item["examid"] for item in results if item["correct"]}
-            for row in session.exec(
-                select(WrongBook).where(
-                    WrongBook.userid == userid, WrongBook.examid.in_(correct_examids)
-                )
-            ).all():
-                row.mastered = True
-                row.updated_at = datetime.now(timezone.utc)
-                session.add(row)
+            if correct_examids:
+                for row in session.exec(
+                    select(WrongBook).where(
+                        WrongBook.userid == userid,
+                        WrongBook.examid.in_(correct_examids),
+                    )
+                ).all():
+                    row.correct_streak += 1
+                    if row.correct_streak >= 2:
+                        row.mastered = True
+                    row.updated_at = datetime.now(timezone.utc)
+                    session.add(row)
 
         session.add(
             PracticeSessions(
@@ -525,10 +534,9 @@ def exam_submit(videoid: int, token: str, answers: dict = Body()):
         )
         session.commit()
 
-    # 错题解析异步生成（缓存到 exams.analysis），不阻塞响应
+    # 错因标签与个性化解析异步生成（写入该生 WrongBook 行），不阻塞响应
     for question, user_answer in wrong_items:
-        if not question.analysis:
-            worker.submit(gen_wrong_analysis, question, user_answer)
+        worker.submit(gen_wrong_reason, question, user_answer, userid)
 
     return {
         "message": "ok",
@@ -536,14 +544,14 @@ def exam_submit(videoid: int, token: str, answers: dict = Body()):
         "duration_seconds": duration_seconds,
         "results": results,
         "wrong_examids": [question.examid for question, _ in wrong_items],
-        "analysis_pending": any(not question.analysis for question, _ in wrong_items),
+        "analysis_pending": bool(wrong_items),
     }
 
 
 # ==================== 题库管理 ====================
 
-VALID_TYPES = ("choice", "blank", "qa")
-DEFAULT_SCORES = {"choice": 5, "blank": 10, "qa": 20}
+VALID_TYPES = ("choice", "multi", "judge")
+DEFAULT_SCORES = {"choice": 5, "multi": 10, "judge": 5}
 
 
 def _auth_userid(token: str):
@@ -558,29 +566,39 @@ def _validate_bank_item(data: dict):
     """校验题库题目字段，返回 (错误信息 or None, 清洗后的字段 dict)。"""
     qtype = str(data.get("type", ""))
     if qtype not in VALID_TYPES:
-        return "题型必须是 choice/blank/qa", None
+        return "题型必须是 choice/multi/judge", None
     question = str(data.get("question", "")).strip()
     if not question:
         return "题干不能为空", None
+    if len(question) > MAX_QUESTION_LEN:
+        return f"题干不能超过 {MAX_QUESTION_LEN} 字", None
     answer = str(data.get("answer", "")).strip()
     if not answer:
         return "答案不能为空", None
     knowledge_point = str(data.get("knowledge_point", "")).strip() or "综合"
 
     options = None
-    alt_answers = None
-    if qtype == "choice":
+    if qtype in ("choice", "multi"):
         raw_options = data.get("options")
         if not isinstance(raw_options, dict) or set(raw_options.keys()) != {"A", "B", "C", "D"}:
             return "选择题必须包含 A/B/C/D 四个选项", None
-        if answer not in ("A", "B", "C", "D"):
-            return "选择题答案必须是 A/B/C/D", None
+        for text in raw_options.values():
+            if len(str(text)) > MAX_OPTION_LEN:
+                return f"选项文本不能超过 {MAX_OPTION_LEN} 字", None
+        if qtype == "choice":
+            if answer.upper() not in ("A", "B", "C", "D") or len(answer) != 1:
+                return "单选题答案必须是 A/B/C/D 之一", None
+            answer = answer.upper()
+        else:
+            letters = set(answer.upper())
+            if not (2 <= len(letters) <= 4) or not letters <= set("ABCD"):
+                return "多选题答案必须是 A-D 中 2-4 个不重复选项", None
+            answer = "".join(sorted(letters))
         options = json.dumps(raw_options, ensure_ascii=False)
-    if qtype == "blank":
-        raw_alts = data.get("alt_answers") or []
-        if not isinstance(raw_alts, list):
-            return "备选答案必须是数组", None
-        alt_answers = json.dumps([str(a) for a in raw_alts], ensure_ascii=False) or None
+    if qtype == "judge":
+        answer = answer.upper()
+        if answer not in ("T", "F"):
+            return "判断题答案必须是 T（正确）或 F（错误）", None
 
     try:
         score = int(data.get("score") or DEFAULT_SCORES[qtype])
@@ -588,6 +606,13 @@ def _validate_bank_item(data: dict):
         return "分值必须是整数", None
     if score <= 0:
         return "分值必须大于 0", None
+
+    try:
+        difficulty = int(data.get("difficulty") or 2)
+    except (TypeError, ValueError):
+        return "难度必须是 1/2/3", None
+    if difficulty not in (1, 2, 3):
+        return "难度必须是 1（易）/2（中）/3（难）", None
 
     videoid = data.get("videoid")
     if videoid in ("", None):
@@ -599,15 +624,17 @@ def _validate_bank_item(data: dict):
             return "videoid 必须是整数", None
 
     analysis = str(data.get("analysis", "")).strip() or None
+    if analysis and len(analysis) > MAX_ANALYSIS_LEN:
+        return f"解析不能超过 {MAX_ANALYSIS_LEN} 字", None
     return None, {
         "question": question,
         "type": qtype,
         "answer": answer,
         "score": score,
         "options": options,
-        "alt_answers": alt_answers,
         "knowledge_point": knowledge_point,
         "analysis": analysis,
+        "difficulty": difficulty,
         "videoid": videoid,
     }
 
@@ -624,7 +651,7 @@ def _exam_to_dict(exam: Exams, videotitle: str | None) -> dict:
         "answer": exam.answer,
         "knowledge_point": exam.knowledge_point or "综合",
         "analysis": exam.analysis,
-        "alt_answers": json.loads(exam.alt_answers) if exam.alt_answers else [],
+        "difficulty": exam.difficulty or 2,
     }
 
 
@@ -656,6 +683,41 @@ def bank_knowledge_points():
     with Session(engine) as session:
         rows = session.exec(select(Exams.knowledge_point).distinct()).all()
     return {"items": sorted(point for point in rows if point)}
+
+
+@app.get("/api/bank/difficulty-stats")
+def bank_difficulty_stats():
+    """实测难度回填：按首答记录（Scores.mode='exam'）聚合每题实测正确率。"""
+    with Session(engine) as session:
+        score_rows = session.exec(select(Scores).where(Scores.mode == "exam")).all()
+        exam_map = {
+            exam.examid: exam
+            for exam in session.exec(
+                select(Exams).where(Exams.examid.in_([r.examid for r in score_rows]))
+            ).all()
+        } if score_rows else {}
+    stats: dict[int, dict] = {}
+    for row in score_rows:
+        exam = exam_map.get(row.examid)
+        if exam is None:
+            continue
+        bucket = stats.setdefault(row.examid, {"attempts": 0, "correct_count": 0})
+        bucket["attempts"] += 1
+        if _is_correct(exam, row.score):
+            bucket["correct_count"] += 1
+    items = [
+        {
+            "examid": examid,
+            "attempts": bucket["attempts"],
+            "correct_count": bucket["correct_count"],
+            # 样本量不足 5 次首答时不给出实测正确率
+            "measured_accuracy": round(bucket["correct_count"] / bucket["attempts"], 4)
+            if bucket["attempts"] >= 5
+            else None,
+        }
+        for examid, bucket in sorted(stats.items())
+    ]
+    return {"items": items}
 
 
 @app.post("/api/bank/add/{token}")
@@ -727,19 +789,13 @@ def practice_judge(token: str, data: dict = Body()):
         exam = session.get(Exams, examid)
     if exam is None:
         raise HTTPException(status_code=404, detail="题目不存在")
-    if exam.type == "qa":
-        score = ai_score(answer, exam.question, exam.answer)
-        return {
-            "score": score,
-            "correct": _is_correct(exam, score),
-            "analysis": exam.answer,  # 简答题展示参考答案
-        }
     score = _judge_one(exam, answer)
     return {
         "score": score,
         "correct": _is_correct(exam, score),
         "answer": exam.answer,
         "analysis": exam.analysis or "",
+        "difficulty": exam.difficulty or 2,
     }
 
 
@@ -781,13 +837,16 @@ def _wrongbook_item(row: WrongBook, exam: Exams, videotitle: str | None) -> dict
             "mastered": row.mastered,
             "last_answer": row.last_answer,
             "standard_answer": exam.answer,
+            "wrong_reason": row.wrong_reason,
+            "wrong_analysis": row.wrong_analysis,
+            "correct_streak": row.correct_streak,
         }
     )
     return item
 
 
 @app.get("/api/wrongbook/list/{token}")
-def wrongbook_list(token: str, mastered: str = ""):
+def wrongbook_list(token: str, mastered: str = "", reason: str = ""):
     userid = _auth_userid(token)
     if userid is None:
         return "Token-Fail"
@@ -795,6 +854,10 @@ def wrongbook_list(token: str, mastered: str = ""):
         statement = select(WrongBook).where(WrongBook.userid == userid)
         if mastered in ("true", "false"):
             statement = statement.where(WrongBook.mastered == (mastered == "true"))
+        if reason == "pending":
+            statement = statement.where(WrongBook.wrong_reason.is_(None))  # type: ignore[union-attr]
+        elif reason:
+            statement = statement.where(WrongBook.wrong_reason == reason)
         rows = session.exec(
             statement.order_by(WrongBook.mastered, desc(WrongBook.updated_at))
         ).all()
@@ -839,13 +902,23 @@ def wrongbook_master(wrongid: int, token: str, data: dict = Body()):
 
 @app.get("/api/wrongbook/analysis/{examid}/{token}")
 def wrongbook_analysis(examid: int, token: str):
-    if _auth_userid(token) is None:
+    userid = _auth_userid(token)
+    if userid is None:
         return "Token-Fail"
     with Session(engine) as session:
         exam = session.get(Exams, examid)
-    if exam is None:
-        raise HTTPException(status_code=404, detail="题目不存在")
-    return {"analysis": exam.analysis}
+        if exam is None:
+            raise HTTPException(status_code=404, detail="题目不存在")
+        row = session.exec(
+            select(WrongBook).where(
+                WrongBook.userid == userid, WrongBook.examid == examid
+            )
+        ).first()
+    return {
+        "wrong_reason": row.wrong_reason if row else None,
+        "wrong_analysis": row.wrong_analysis if row else None,
+        "analysis": exam.analysis,
+    }
 
 
 # ==================== 学习数据分析 ====================
@@ -876,13 +949,16 @@ def stats_overview(token: str):
                 select(PracticeSessions).where(PracticeSessions.userid == userid)
             ).all()
         )
-        pending_wrong = len(
-            session.exec(
-                select(WrongBook).where(
-                    WrongBook.userid == userid, WrongBook.mastered == False  # noqa: E712
-                )
-            ).all()
-        )
+        pending_rows = session.exec(
+            select(WrongBook).where(
+                WrongBook.userid == userid, WrongBook.mastered == False  # noqa: E712
+            )
+        ).all()
+        pending_wrong = len(pending_rows)
+        reason_counts: dict[str, int] = {}
+        for row in pending_rows:
+            key = row.wrong_reason or "分析中"
+            reason_counts[key] = reason_counts.get(key, 0) + 1
         video_ids = {s.videoid for s in sessions if s.videoid is not None}
         titles = {
             video.videoid: video.videotitle
@@ -912,13 +988,26 @@ def stats_overview(token: str):
         for row in score_rows
         if row.examid in exam_map and _is_correct(exam_map[row.examid], row.score)
     )
+    # 正确率口径分离：首答（mode='exam'）与含重做（全部记录）
+    first_rows = [row for row in score_rows if row.mode == "exam"]
+    first_correct = sum(
+        1
+        for row in first_rows
+        if row.examid in exam_map and _is_correct(exam_map[row.examid], row.score)
+    )
     return {
         "summary": {
             "total_answers": total,
-            "accuracy": round(correct_total / total, 4) if total else 0,
+            "first_answers": len(first_rows),
+            "first_accuracy": round(first_correct / len(first_rows), 4) if first_rows else 0,
+            "overall_accuracy": round(correct_total / total, 4) if total else 0,
             "total_duration_seconds": total_duration,
             "pending_wrong": pending_wrong,
         },
+        "by_wrong_reason": [
+            {"reason": reason, "count": count}
+            for reason, count in sorted(reason_counts.items())
+        ],
         "by_knowledge_point": [
             {"knowledge_point": b["name"], "total": b["total"],
              "correct": b["correct"], "accuracy": b["accuracy"]}

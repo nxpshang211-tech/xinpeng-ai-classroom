@@ -122,32 +122,23 @@ td {
     margin: 20px auto;
     border: solid 1px lightskyblue;
 }
-.choice-box, .qa-box{
+.choice-box, .multi-box, .judge-box {
     width: 1100px;
     min-height: 120px;
     margin: 30px auto;
     border-bottom: solid 1px lightskyblue;
 }
-.choice-box .question, .qa-box .question {
+.choice-box .question, .multi-box .question, .judge-box .question {
     text-align: left;
     width: 95%;
     min-height: 40px;
     margin: 10px auto;
     border-bottom: dotted 1px darkgrey;
 }
-.choice-box .options {
+.choice-box .options, .multi-box .options, .judge-box .options {
     text-align: left;
     width: 95%;
     min-height: 40px;
-    margin: 10px auto;
-}
-.qa-box .answer {
-    width: 95%;
-    height: 150px;
-    margin: 10px auto;
-}.qa-box .answer-input {
-    width: 95%;
-    height: 100px;
     margin: 10px auto;
 }
 .exam-box .submit {
@@ -216,31 +207,6 @@ td {
     font-size: 12px;
     color: #b42318;
     margin-left: 12px;
-}
-.blank-box {
-    width: 1100px;
-    min-height: 80px;
-    margin: 30px auto;
-    border-bottom: solid 1px lightskyblue;
-}
-.blank-box .question {
-    text-align: left;
-    width: 95%;
-    min-height: 40px;
-    margin: 10px auto;
-    border-bottom: dotted 1px darkgrey;
-}
-.blank-box .answer {
-    width: 95%;
-    margin: 10px auto;
-    text-align: left;
-}
-.blank-input {
-    width: 60%;
-    height: 32px;
-    padding: 0 8px;
-    border: solid 1px darkgrey;
-    border-radius: 4px;
 }
 .judge-line {
     width: 95%;

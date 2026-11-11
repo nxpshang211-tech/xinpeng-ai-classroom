@@ -43,6 +43,9 @@ class Settings:
     aliyun_search_endpoint: str = _env("ALIYUN_SEARCH_ENDPOINT")
     max_upload_mb: int = int(_env("MAX_UPLOAD_MB", "500"))
 
+    # 多选题给分策略：true=漏选半分、错选零分；false=全对才得分
+    multi_partial_credit: bool = _env("MULTI_PARTIAL_CREDIT", "true").lower() == "true"
+
     # Local demo defaults. Replace both values before a public deployment.
     token_aes_key: bytes = _env("TOKEN_AES_KEY", "chapter07-demo-k").encode("utf-8")
     token_aes_iv: bytes = _env("TOKEN_AES_IV", "chapter07-demo-i").encode("utf-8")

@@ -21,7 +21,7 @@ from sqlmodel import Session, select
 from moviepy.editor import AudioFileClip, VideoFileClip
 
 from config import settings
-from model import Exams, Videos, engine
+from model import Exams, Videos, WrongBook, engine
 
 
 class PipelineError(RuntimeError):
@@ -453,48 +453,91 @@ def write_xmind_file(xmind_json: dict[str, Any], filename: str) -> Path:
     return output
 
 
+MAX_QUESTION_LEN = 500
+MAX_OPTION_LEN = 200
+MAX_ANALYSIS_LEN = 500
+
+
+def _validate_choice_item(item: Any, allow_multi: bool) -> None:
+    if not isinstance(item, dict):
+        raise ValueError("题目必须是对象")
+    question = str(item.get("question") or "")
+    if not question:
+        raise ValueError("题干不能为空")
+    if len(question) > MAX_QUESTION_LEN:
+        raise ValueError(f"题干不能超过 {MAX_QUESTION_LEN} 字")
+    options = item.get("options")
+    if not isinstance(options, dict) or set(options.keys()) != {"A", "B", "C", "D"}:
+        raise ValueError("每道选择题必须包含 A/B/C/D 四个选项")
+    for text in options.values():
+        if len(str(text)) > MAX_OPTION_LEN:
+            raise ValueError(f"选项文本不能超过 {MAX_OPTION_LEN} 字")
+    answer = str(item.get("answer") or "")
+    letters = set(answer)
+    if not allow_multi:
+        if answer not in {"A", "B", "C", "D"}:
+            raise ValueError("单选题答案必须是 A/B/C/D 之一")
+    else:
+        if not (2 <= len(letters) <= 4) or not letters <= {"A", "B", "C", "D"} \
+                or len(letters) != len(answer):
+            raise ValueError("多选题答案必须是 A-D 中 2-4 个不重复字母")
+    if not item.get("knowledge_point"):
+        raise ValueError("每道题必须标注知识点")
+    if len(str(item.get("analysis") or "")) > MAX_ANALYSIS_LEN:
+        raise ValueError(f"解析不能超过 {MAX_ANALYSIS_LEN} 字")
+
+
 def _validate_exam(data: dict[str, Any]) -> None:
-    choices = data.get("choices")
-    blanks = data.get("blanks")
-    qas = data.get("qas")
-    if not isinstance(choices, list) or len(choices) != 6:
-        raise ValueError("必须生成 6 道选择题")
-    if not isinstance(blanks, list) or len(blanks) != 3:
-        raise ValueError("必须生成 3 道填空题")
-    if not isinstance(qas, list) or len(qas) != 2:
-        raise ValueError("必须生成 2 道简答题")
-    for item in choices:
-        if not all(key in item for key in ("question", "options", "answer", "knowledge_point")):
-            raise ValueError("选择题字段不完整")
-        if set(item["options"].keys()) != {"A", "B", "C", "D"}:
-            raise ValueError("每道选择题必须包含 A/B/C/D 四个选项")
-        if item["answer"] not in item["options"]:
-            raise ValueError("选择题答案必须是 A/B/C/D")
+    singles = data.get("singles")
+    multis = data.get("multis")
+    judges = data.get("judges")
+    if not isinstance(singles, list) or len(singles) != 6:
+        raise ValueError("必须生成 6 道单选题")
+    if not isinstance(multis, list) or len(multis) != 4:
+        raise ValueError("必须生成 4 道多选题")
+    if not isinstance(judges, list) or len(judges) != 6:
+        raise ValueError("必须生成 6 道判断题")
+    for item in singles:
+        _validate_choice_item(item, allow_multi=False)
+    for item in multis:
+        _validate_choice_item(item, allow_multi=True)
+    for item in judges:
+        if not isinstance(item, dict):
+            raise ValueError("判断题必须是对象")
+        question = str(item.get("question") or "")
+        if not question:
+            raise ValueError("判断题题干不能为空")
+        if len(question) > MAX_QUESTION_LEN:
+            raise ValueError(f"题干不能超过 {MAX_QUESTION_LEN} 字")
+        if str(item.get("answer") or "") not in {"T", "F"}:
+            raise ValueError("判断题答案必须是 T 或 F")
         if not item.get("knowledge_point"):
-            raise ValueError("选择题必须标注知识点")
-    for item in blanks:
-        if not item.get("question") or not item.get("answer"):
-            raise ValueError("填空题字段不完整")
-        if not item.get("knowledge_point"):
-            raise ValueError("填空题必须标注知识点")
-        if "alt_answers" in item and not isinstance(item["alt_answers"], list):
-            raise ValueError("填空题备选答案必须是数组")
-    for item in qas:
-        if not item.get("question") or not item.get("answer"):
-            raise ValueError("简答题字段不完整")
-        if not item.get("knowledge_point"):
-            raise ValueError("简答题必须标注知识点")
+            raise ValueError("判断题必须标注知识点")
+        if len(str(item.get("analysis") or "")) > MAX_ANALYSIS_LEN:
+            raise ValueError(f"解析不能超过 {MAX_ANALYSIS_LEN} 字")
+
+
+def _normalize_exam_item(item: dict[str, Any]) -> dict[str, Any]:
+    difficulty = item.get("difficulty")
+    if difficulty not in (1, 2, 3):
+        difficulty = 2
+    return {**item, "difficulty": difficulty}
 
 
 def gen_exam(text: str) -> str:
     prompt = f"""
-根据课堂文本生成 6 道单选题、3 道填空题和 2 道简答题，覆盖核心知识点，难度适中。
-每道题必须标注考察的知识点（knowledge_point，2-8 个字）并给出简短解析（analysis，100 字内）。
+根据课堂文本按组卷蓝图生成一套纯客观题试卷：6 道单选题、4 道多选题、6 道判断题，覆盖核心知识点。
+要求：
+1. 多选题正确答案为 2-4 个选项；判断题只考课堂中明确讲过的事实性结论，答案 T 表示正确、F 表示错误。
+2. 难度配比约为 易(1) 6 道 / 中(2) 7 道 / 难(3) 3 道，difficulty 只能取 1、2、3。
+3. 题干不超过 500 字，每个选项不超过 200 字。
+4. 每道题标注考察的知识点（knowledge_point，2-8 个字）并给出简短解析（analysis，100 字内）。
+5. 多选题的 answer 用大写字母升序拼接，如 "ABD"。
 只返回合法 JSON：
 {{
-  "choices": [{{"question": "题目", "options": {{"A": "", "B": "", "C": "", "D": ""}}, "answer": "A", "knowledge_point": "知识点", "analysis": "解析"}}],
-  "blanks": [{{"question": "题目（用____表示填空处）", "answer": "标准答案", "alt_answers": ["其他可接受答案"], "knowledge_point": "知识点", "analysis": "解析"}}],
-  "qas": [{{"question": "题目", "answer": "参考答案", "knowledge_point": "知识点", "analysis": "解析"}}]
+  "singles": [{{"question": "题目", "options": {{"A": "", "B": "", "C": "", "D": ""}}, "answer": "A", "knowledge_point": "知识点", "difficulty": 2, "analysis": "解析"}}],
+  "multis": [{{"question": "题目", "options": {{"A": "", "B": "", "C": "", "D": ""}}, "answer": "ABD", "knowledge_point": "知识点", "difficulty": 2, "analysis": "解析"}}],
+  "judges": [{{"question": "题目", "answer": "T", "knowledge_point": "知识点", "difficulty": 2, "analysis": "解析"}}]
 }}
 课堂文本如下：
 {text}
@@ -509,49 +552,56 @@ def gen_exam(text: str) -> str:
 
 def insert_exam(examtext: str, videoid: int) -> None:
     exam_json = json.loads(examtext)
+    if "blanks" in exam_json or "qas" in exam_json:
+        raise ValueError("检测到旧版试卷格式，需要重新生成")
     _validate_exam(exam_json)
     with Session(engine) as session:
         if session.exec(select(Exams).where(Exams.videoid == videoid)).first():
             return
-        for choice in exam_json["choices"]:
+        for choice in exam_json["singles"]:
+            item = _normalize_exam_item(choice)
             session.add(
                 Exams(
                     videoid=videoid,
-                    question=choice["question"],
-                    answer=choice["answer"],
+                    question=item["question"],
+                    answer=item["answer"],
                     type="choice",
                     score=5,
-                    options=json.dumps(choice["options"], ensure_ascii=False),
-                    knowledge_point=choice["knowledge_point"],
-                    analysis=choice.get("analysis"),
+                    options=json.dumps(item["options"], ensure_ascii=False),
+                    knowledge_point=item["knowledge_point"],
+                    analysis=item.get("analysis"),
+                    difficulty=item["difficulty"],
                 )
             )
-        for blank in exam_json["blanks"]:
-            alt = blank.get("alt_answers") or []
+        for multi in exam_json["multis"]:
+            item = _normalize_exam_item(multi)
+            answer = "".join(sorted(set(str(item["answer"]).upper())))
             session.add(
                 Exams(
                     videoid=videoid,
-                    question=blank["question"],
-                    answer=blank["answer"],
-                    type="blank",
+                    question=item["question"],
+                    answer=answer,
+                    type="multi",
                     score=10,
-                    options=None,
-                    knowledge_point=blank["knowledge_point"],
-                    analysis=blank.get("analysis"),
-                    alt_answers=json.dumps(alt, ensure_ascii=False) if alt else None,
+                    options=json.dumps(item["options"], ensure_ascii=False),
+                    knowledge_point=item["knowledge_point"],
+                    analysis=item.get("analysis"),
+                    difficulty=item["difficulty"],
                 )
             )
-        for qa in exam_json["qas"]:
+        for judge in exam_json["judges"]:
+            item = _normalize_exam_item(judge)
             session.add(
                 Exams(
                     videoid=videoid,
-                    question=qa["question"],
-                    answer=qa["answer"],
-                    type="qa",
-                    score=20,
+                    question=item["question"],
+                    answer=item["answer"],
+                    type="judge",
+                    score=5,
                     options=None,
-                    knowledge_point=qa["knowledge_point"],
-                    analysis=qa.get("analysis"),
+                    knowledge_point=item["knowledge_point"],
+                    analysis=item.get("analysis"),
+                    difficulty=item["difficulty"],
                 )
             )
         session.commit()
@@ -618,61 +668,53 @@ def gen_key_frames(filepath: str | Path) -> list[Path]:
     return [target / path.name for path in written]
 
 
-def grade_blank(user_answer: str, standard: str, alt_answers: list[str] | None = None) -> bool:
-    """填空题判分：规范化后与标准答案/备选答案精确比对，纯本地即时完成。"""
+def gen_wrong_reason(exam: Exams, student_answer: str, userid: int) -> tuple[str, str] | None:
+    """为错题生成结构化错因标签与个性化解析，写入该生的 WrongBook 行。
 
-    def normalize(text: str) -> str:
-        # 全角转半角、去首尾空白、内部连续空白折叠、大小写折叠
-        normalized = "".join(
-            chr(ord(ch) - 0xFEE0) if 0xFF01 <= ord(ch) <= 0xFF5E else ch
-            for ch in str(text)
-        )
-        return " ".join(normalized.split()).lower()
-
-    target = normalize(standard)
-    candidates = [normalize(item) for item in (alt_answers or [])]
-    return normalize(user_answer) in {target, *candidates}
-
-
-def gen_wrong_analysis(exam: Exams, student_answer: str) -> str | None:
-    """为错题生成解析：优先用题目已有缓存，否则 AI 生成并写回 exams.analysis。"""
-    if exam.analysis:
-        return exam.analysis
+    返回 (reason, analysis)；AI 失败时返回 None，不阻塞主流程。
+    """
+    options_text = ""
+    if exam.options:
+        try:
+            options = json.loads(exam.options)
+            options_text = "；".join(f"{k}.{v}" for k, v in sorted(options.items()))
+        except json.JSONDecodeError:
+            options_text = ""
+    type_names = {"choice": "单选题", "multi": "多选题", "judge": "判断题"}
     prompt = f"""
-题目（{exam.type}）：{exam.question}
+{type_names.get(exam.type, "客观题")}：{exam.question}
+{f"选项：{options_text}" if options_text else ""}
 标准答案：{exam.answer}
-学生的错误答案：{student_answer}
-请用 150 字以内说明学生可能出错的原因，并给出正确解题思路。只输出解析正文。
+学生的错误答案：{student_answer or "（未作答）"}
+请分析学生出错的原因。只返回合法 JSON：
+{{"reason": "从 概念混淆/知识盲区/粗心失误/方法错误 四者中选最贴切的一个", "analysis": "150 字以内，说明出错原因并给出正确解题思路"}}
 """.strip()
+
+    def validate(data: dict[str, Any]) -> None:
+        if data.get("reason") not in ("概念混淆", "知识盲区", "粗心失误", "方法错误"):
+            raise ValueError("reason 必须是四类错因之一")
+        if not str(data.get("analysis") or "").strip():
+            raise ValueError("analysis 不能为空")
+
     try:
-        analysis = _call_text_model("你是一名耐心细致的辅导教师。", prompt)
+        data = _generate_json("你是一名耐心细致的辅导教师。", prompt, validate)
     except PipelineError:
         return None
+    reason = data["reason"]
+    analysis = str(data["analysis"]).strip()
     with Session(engine) as session:
-        row = session.get(Exams, exam.examid)
-        if row is not None and not row.analysis:
-            row.analysis = analysis
+        row = session.exec(
+            select(WrongBook).where(
+                WrongBook.userid == userid, WrongBook.examid == exam.examid
+            )
+        ).first()
+        if row is not None and not row.wrong_reason:
+            row.wrong_reason = reason
+            row.wrong_analysis = analysis
+            row.updated_at = datetime.now(timezone.utc)
             session.add(row)
             session.commit()
-    return analysis
-
-
-def ai_score(user_answer: str, question: str, ai_answer: str) -> int:
-    prompt = f"""
-题目：{question}
-参考答案：{ai_answer}
-学生答案：{user_answer}
-本题满分 20 分。请依据知识点覆盖、准确性和表达完整度评分。
-只输出 0 到 20 之间的整数，不要输出解释。
-""".strip()
-    raw = _call_text_model("你是一名严格且稳定的阅卷教师。", prompt)
-    try:
-        score = int(raw.strip())
-    except ValueError as exc:
-        raise PipelineError(f"简答题评分不是整数：{raw}") from exc
-    if not 0 <= score <= 20:
-        raise PipelineError(f"简答题评分超出 0-20：{score}")
-    return score
+    return reason, analysis
 
 
 def _update_video(videoid: int, **values: Any) -> None:
@@ -783,6 +825,15 @@ def process_video(videoid: int) -> None:
             exam_text = video.examjson if video else None
         stage = "generating_exam"
         _update_video(videoid, stage=stage, progress=90)
+        # 旧版试卷缓存（含填空/简答）视为无效，重新生成纯客观题试卷
+        if exam_text:
+            try:
+                cached = json.loads(exam_text)
+            except json.JSONDecodeError:
+                cached = {}
+            if not isinstance(cached, dict) or "blanks" in cached or "qas" in cached \
+                    or "singles" not in cached:
+                exam_text = None
         if not exam_text:
             exam_text = gen_exam(content)
         insert_exam(exam_text, videoid)

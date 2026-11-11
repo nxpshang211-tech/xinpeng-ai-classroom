@@ -24,9 +24,9 @@
     <div class="panel">
         题型：<select id="filter-type" onchange="loadBank()">
             <option value="">全部</option>
-            <option value="choice">选择题</option>
-            <option value="blank">填空题</option>
-            <option value="qa">简答题</option>
+            <option value="choice">单选题</option>
+            <option value="multi">多选题</option>
+            <option value="judge">判断题</option>
         </select>
         知识点：<select id="filter-kp" onchange="loadBank()"><option value="">全部</option></select>
         关键词：<input type="text" id="filter-keyword" oninput="debouncedBankSearch()">
@@ -38,31 +38,44 @@
         <input type="hidden" id="form-examid">
         <div>题型：
             <select id="form-type" onchange="renderBankTypeFields()">
-                <option value="choice">选择题</option>
-                <option value="blank">填空题</option>
-                <option value="qa">简答题</option>
+                <option value="choice">单选题</option>
+                <option value="multi">多选题</option>
+                <option value="judge">判断题</option>
             </select>
         </div>
-        <div>题干：<input type="text" id="form-question" style="width:500px"></div>
+        <div>题干（≤500 字）：<input type="text" id="form-question" style="width:500px"></div>
         <div id="form-choice-fields">
-            选项A：<input type="text" id="opt-A">
+            选项A（≤200 字）：<input type="text" id="opt-A">
             选项B：<input type="text" id="opt-B">
             选项C：<input type="text" id="opt-C">
             选项D：<input type="text" id="opt-D">
+        </div>
+        <div id="form-answer-single">
             答案：<select id="form-answer-choice">
                 <option>A</option><option>B</option><option>C</option><option>D</option>
             </select>
         </div>
-        <div id="form-blank-fields" style="display:none;">
-            标准答案：<input type="text" id="form-answer-blank">
-            备选答案（逗号分隔）：<input type="text" id="form-alt-answers">
+        <div id="form-answer-multi" style="display:none;">
+            答案（勾选 2-4 项）：
+            <label><input type="checkbox" class="multi-answer" value="A">A</label>
+            <label><input type="checkbox" class="multi-answer" value="B">B</label>
+            <label><input type="checkbox" class="multi-answer" value="C">C</label>
+            <label><input type="checkbox" class="multi-answer" value="D">D</label>
         </div>
-        <div id="form-qa-fields" style="display:none;">
-            参考答案：<input type="text" id="form-answer-qa" style="width:500px">
+        <div id="form-judge-fields" style="display:none;">
+            答案：<select id="form-answer-judge">
+                <option value="T">正确</option>
+                <option value="F">错误</option>
+            </select>
         </div>
         <div>知识点：<input type="text" id="form-kp"></div>
-        <div>分值（留空取默认 5/10/20）：<input type="text" id="form-score"></div>
-        <div>解析（可空）：<input type="text" id="form-analysis" style="width:500px"></div>
+        <div>难度：<select id="form-difficulty">
+            <option value="1">易</option>
+            <option value="2" selected>中</option>
+            <option value="3">难</option>
+        </select></div>
+        <div>分值（留空取默认 5/10/5）：<input type="text" id="form-score"></div>
+        <div>解析（可空，≤500 字）：<input type="text" id="form-analysis" style="width:500px"></div>
         <button onclick="saveBankItem()">保存</button>
         <button onclick="hideBankForm()">取消</button>
     </div>
@@ -70,21 +83,49 @@
     <table>
         <thead>
         <tr>
-            <td>编号</td><td>题干</td><td>题型</td><td>知识点</td>
-            <td>分值</td><td>所属视频</td><td>操作</td>
+            <td>编号</td><td>题干</td><td>题型</td><td>知识点</td><td>难度</td>
+            <td>分值</td><td>实测正确率</td><td>所属视频</td><td>操作</td>
         </tr>
         </thead>
         <tbody id="bank-tbody"></tbody>
     </table>
 
     <script>
-        const TYPE_NAMES = {choice: "选择题", blank: "填空题", qa: "简答题"};
+        const TYPE_NAMES = {choice: "单选题", multi: "多选题", judge: "判断题"};
+        const DIFF_NAMES = {1: "易", 2: "中", 3: "难"};
         let bankItems = [];
+        let diffStats = {};
         let bankTimer = null;
 
         function debouncedBankSearch() {
             clearTimeout(bankTimer);
             bankTimer = setTimeout(loadBank, 500);
+        }
+
+        // 实测难度：AI 标签与首答实测正确率偏差过大时提示复审
+        function measuredCell(item) {
+            const stat = diffStats[item.examid];
+            if (!stat || stat.measured_accuracy == null) return "样本不足";
+            const percent = Math.round(stat.measured_accuracy * 100) + "%";
+            const needReview = (item.difficulty === 1 && stat.measured_accuracy < 0.4) ||
+                               (item.difficulty === 3 && stat.measured_accuracy > 0.85);
+            return percent + (needReview ? ' <b style="color:#b42318">⚠ 待复审</b>' : "");
+        }
+
+        function renderBankTable() {
+            const tbody = document.getElementById("bank-tbody");
+            tbody.innerHTML = bankItems.map(item =>
+                `<tr><td>${item.examid}</td>` +
+                `<td>${item.question.slice(0, 40)}</td>` +
+                `<td>${TYPE_NAMES[item.type] || item.type}</td>` +
+                `<td>${item.knowledge_point}</td>` +
+                `<td>${DIFF_NAMES[item.difficulty] || "中"}</td>` +
+                `<td>${item.score}</td>` +
+                `<td>${measuredCell(item)}</td>` +
+                `<td>${item.videotitle || "公共题库"}</td>` +
+                `<td><a href="#" onclick='editBankItem(${item.examid});return false;'>编辑</a> ` +
+                `<a href="#" onclick="deleteBankItem(${item.examid});return false;">删除</a></td></tr>`
+            ).join("");
         }
 
         function loadBank() {
@@ -99,17 +140,7 @@
                 .then(r => r.json())
                 .then(data => {
                     bankItems = data.items;
-                    const tbody = document.getElementById("bank-tbody");
-                    tbody.innerHTML = data.items.map(item =>
-                        `<tr><td>${item.examid}</td>` +
-                        `<td>${item.question.slice(0, 40)}</td>` +
-                        `<td>${TYPE_NAMES[item.type] || item.type}</td>` +
-                        `<td>${item.knowledge_point}</td>` +
-                        `<td>${item.score}</td>` +
-                        `<td>${item.videotitle || "公共题库"}</td>` +
-                        `<td><a href="#" onclick='editBankItem(${item.examid});return false;'>编辑</a> ` +
-                        `<a href="#" onclick="deleteBankItem(${item.examid});return false;">删除</a></td></tr>`
-                    ).join("");
+                    renderBankTable();
                 });
             fetch("/api/bank/knowledge-points")
                 .then(r => r.json())
@@ -120,13 +151,22 @@
                         data.items.map(kp => `<option>${kp}</option>`).join("");
                     select.value = current;
                 });
+            fetch("/api/bank/difficulty-stats")
+                .then(r => r.json())
+                .then(data => {
+                    diffStats = {};
+                    (data.items || []).forEach(item => { diffStats[item.examid] = item; });
+                    renderBankTable();
+                });
         }
 
         function renderBankTypeFields() {
             const type = document.getElementById("form-type").value;
-            document.getElementById("form-choice-fields").style.display = type === "choice" ? "" : "none";
-            document.getElementById("form-blank-fields").style.display = type === "blank" ? "" : "none";
-            document.getElementById("form-qa-fields").style.display = type === "qa" ? "" : "none";
+            document.getElementById("form-choice-fields").style.display =
+                (type === "choice" || type === "multi") ? "" : "none";
+            document.getElementById("form-answer-single").style.display = type === "choice" ? "" : "none";
+            document.getElementById("form-answer-multi").style.display = type === "multi" ? "" : "none";
+            document.getElementById("form-judge-fields").style.display = type === "judge" ? "" : "none";
         }
 
         function showBankForm() {
@@ -136,9 +176,8 @@
             document.getElementById("form-kp").value = "";
             document.getElementById("form-score").value = "";
             document.getElementById("form-analysis").value = "";
-            document.getElementById("form-answer-blank").value = "";
-            document.getElementById("form-alt-answers").value = "";
-            document.getElementById("form-answer-qa").value = "";
+            document.getElementById("form-difficulty").value = "2";
+            document.querySelectorAll(".multi-answer").forEach(box => { box.checked = false; });
             document.getElementById("bank-form").style.display = "";
             renderBankTypeFields();
         }
@@ -158,17 +197,22 @@
             document.getElementById("form-kp").value = item.knowledge_point;
             document.getElementById("form-score").value = item.score;
             document.getElementById("form-analysis").value = item.analysis || "";
-            if (item.type === "choice") {
+            document.getElementById("form-difficulty").value = String(item.difficulty || 2);
+            if (item.type === "choice" || item.type === "multi") {
                 document.getElementById("opt-A").value = item.options.A;
                 document.getElementById("opt-B").value = item.options.B;
                 document.getElementById("opt-C").value = item.options.C;
                 document.getElementById("opt-D").value = item.options.D;
-                document.getElementById("form-answer-choice").value = item.answer;
-            } else if (item.type === "blank") {
-                document.getElementById("form-answer-blank").value = item.answer;
-                document.getElementById("form-alt-answers").value = (item.alt_answers || []).join(",");
-            } else {
-                document.getElementById("form-answer-qa").value = item.answer;
+                if (item.type === "choice") {
+                    document.getElementById("form-answer-choice").value = item.answer;
+                } else {
+                    const letters = String(item.answer).split("");
+                    document.querySelectorAll(".multi-answer").forEach(box => {
+                        box.checked = letters.includes(box.value);
+                    });
+                }
+            } else if (item.type === "judge") {
+                document.getElementById("form-answer-judge").value = item.answer;
             }
             renderBankTypeFields();
         }
@@ -181,23 +225,30 @@
                 type: type,
                 knowledge_point: document.getElementById("form-kp").value,
                 analysis: document.getElementById("form-analysis").value,
+                difficulty: Number(document.getElementById("form-difficulty").value),
             };
             const score = document.getElementById("form-score").value.trim();
             if (score) body.score = Number(score);
-            if (type === "choice") {
+            if (type === "choice" || type === "multi") {
                 body.options = {
                     A: document.getElementById("opt-A").value,
                     B: document.getElementById("opt-B").value,
                     C: document.getElementById("opt-C").value,
                     D: document.getElementById("opt-D").value,
                 };
+            }
+            if (type === "choice") {
                 body.answer = document.getElementById("form-answer-choice").value;
-            } else if (type === "blank") {
-                body.answer = document.getElementById("form-answer-blank").value;
-                body.alt_answers = document.getElementById("form-alt-answers").value
-                    .split(",").map(s => s.trim()).filter(s => s);
+            } else if (type === "multi") {
+                const letters = Array.from(document.querySelectorAll(".multi-answer:checked"))
+                    .map(box => box.value).sort().join("");
+                if (letters.length < 2) {
+                    alert("多选题答案至少勾选 2 项");
+                    return;
+                }
+                body.answer = letters;
             } else {
-                body.answer = document.getElementById("form-answer-qa").value;
+                body.answer = document.getElementById("form-answer-judge").value;
             }
             const examid = document.getElementById("form-examid").value;
             const url = examid ? `/api/bank/update/${examid}/${token}` : `/api/bank/add/${token}`;

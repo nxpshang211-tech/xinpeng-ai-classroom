@@ -29,17 +29,39 @@
             <option value="false">仅待复习</option>
             <option value="true">仅已掌握</option>
         </select>
+        错因：<select id="filter-reason" onchange="loadWrongbook()">
+            <option value="">全部</option>
+            <option value="概念混淆">概念混淆</option>
+            <option value="知识盲区">知识盲区</option>
+            <option value="粗心失误">粗心失误</option>
+            <option value="方法错误">方法错误</option>
+            <option value="pending">分析中</option>
+        </select>
     </div>
 
     <div id="wrong-list" style="width:1200px;margin:10px auto;"></div>
 
     <script>
-        const TYPE_NAMES = {choice: "选择题", blank: "填空题", qa: "简答题"};
+        const TYPE_NAMES = {choice: "单选题", multi: "多选题", judge: "判断题"};
+
+        // 答案展示转义：判断题 T/F 转「正确/错误」
+        function formatAnswer(type, answer) {
+            if (type === "judge") {
+                if (String(answer).toUpperCase() === "T") return "正确";
+                if (String(answer).toUpperCase() === "F") return "错误";
+            }
+            return answer || "（空）";
+        }
 
         function loadWrongbook() {
             const token = localStorage.getItem("token");
             const mastered = document.getElementById("filter-mastered").value;
-            const url = `/api/wrongbook/list/${token}` + (mastered ? `?mastered=${mastered}` : "");
+            const reason = document.getElementById("filter-reason").value;
+            const params = new URLSearchParams();
+            if (mastered) params.set("mastered", mastered);
+            if (reason) params.set("reason", reason);
+            const query = params.toString();
+            const url = `/api/wrongbook/list/${token}` + (query ? `?${query}` : "");
             fetch(url)
                 .then(r => r.json())
                 .then(data => {
@@ -54,15 +76,22 @@
                         const redoLink = item.videoid
                             ? `<a href="/exam/${item.videoid}?mode=redo">去重练</a> `
                             : "";
+                        const reasonBadge = item.wrong_reason
+                            ? `<b style="color:#b42318">[${item.wrong_reason}]</b> `
+                            : "[错因分析中...] ";
+                        const streak = item.mastered
+                            ? "已掌握"
+                            : `重练连对 ${item.correct_streak}/2`;
                         return `<div class="wrong-card">
-                            <div><b>[${TYPE_NAMES[item.type] || item.type}]</b> ${item.question}</div>
+                            <div>${reasonBadge}<b>[${TYPE_NAMES[item.type] || item.type}]</b> ${item.question}</div>
                             <div>知识点：${item.knowledge_point} ｜ 错 ${item.wrong_count} 次 ｜
                                 来源：${item.videotitle || "公共题库"} ｜
-                                状态：${item.mastered ? "已掌握" : "待复习"}</div>
-                            <div>我的答案：${item.last_answer || "（空）"}</div>
-                            <div>标准答案：${item.standard_answer}</div>
+                                状态：${streak}</div>
+                            <div>我的答案：${formatAnswer(item.type, item.last_answer)}</div>
+                            <div>标准答案：${formatAnswer(item.type, item.standard_answer)}</div>
                             <div class="wrong-analysis" id="analysis-${item.examid}">
-                                解析：${item.analysis || "解析生成中..."}</div>
+                                错因解析：${item.wrong_analysis || "生成中..."}</div>
+                            <div class="wrong-analysis">题目解析：${item.analysis || "暂无"}</div>
                             <div>
                                 ${redoLink}
                                 <a href="#" onclick="toggleMaster(${item.wrongid}, ${!item.mastered});return false;">
@@ -70,8 +99,8 @@
                             </div>
                         </div>`;
                     }).join("");
-                    // 解析为空的错题，3 秒后轮询一次
-                    data.items.filter(item => !item.analysis).forEach(item => {
+                    // 错因未生成的错题，3 秒后开始轮询
+                    data.items.filter(item => !item.wrong_analysis && !item.mastered).forEach(item => {
                         setTimeout(() => pollAnalysis(item.examid), 3000);
                     });
                 });
@@ -84,8 +113,12 @@
                 .then(data => {
                     const box = document.getElementById(`analysis-${examid}`);
                     if (!box) return;
-                    if (data.analysis) box.textContent = "解析：" + data.analysis;
-                    else setTimeout(() => pollAnalysis(examid), 3000);
+                    if (data.wrong_analysis) {
+                        box.innerHTML = `错因解析：${data.wrong_analysis}` +
+                            (data.wrong_reason ? ` <b>[${data.wrong_reason}]</b>` : "");
+                    } else {
+                        setTimeout(() => pollAnalysis(examid), 3000);
+                    }
                 });
         }
 

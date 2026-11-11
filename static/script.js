@@ -204,9 +204,6 @@ function drawMindMap(data) {
 
 /* ==================== 做题模块：实时持久化 ==================== */
 
-// 每道题的防抖计时器，输入停止 500ms 后自动保存
-const draftTimers = {};
-
 // 将单题答案实时保存到后端，失败时自动重试
 function saveDraft(videoid, examid, answer, retries = 3) {
     const token = localStorage.getItem("token");
@@ -233,30 +230,42 @@ function saveDraft(videoid, examid, answer, retries = 3) {
     });
 }
 
-// 简答题输入防抖：停止输入 500ms 后才发起保存，避免频繁请求
-function debouncedSaveDraft(videoid, examid, answer) {
-    clearTimeout(draftTimers[examid]);
-    draftTimers[examid] = window.setTimeout(
-        () => saveDraft(videoid, examid, answer), 500
+// 收集多选题已勾选的选项字母，去重升序拼接（如 "ABD"）
+function collectMultiAnswer(examid) {
+    const boxes = Array.from(
+        document.querySelectorAll(`input[name="multi-${examid}"]:checked`)
     );
+    return boxes.map(box => box.value.split("-")[2]).sort().join("");
+}
+
+// 答案展示转义：判断题 T/F 转「正确/错误」，其余原样
+function formatAnswer(type, answer) {
+    if (type === "judge") {
+        if (String(answer).toUpperCase() === "T") return "正确";
+        if (String(answer).toUpperCase() === "F") return "错误";
+    }
+    return answer;
 }
 
 // 统计并展示做题进度：已完成题数 / 总题数（redo 模式下隐藏的题目不计入）
 function updateExamStats() {
     const visible = el => el.offsetParent !== null;
     const radios = Array.from(
-        document.querySelectorAll('.choice-box input[type="radio"]')
+        document.querySelectorAll('.choice-box input[type="radio"], .judge-box input[type="radio"]')
     ).filter(visible);
-    const totalChoices = new Set(radios.map(radio => radio.name)).size;
-    const answeredChoices = new Set(
+    const singleGroups = new Set(radios.map(radio => radio.name));
+    const answeredSingles = new Set(
         radios.filter(radio => radio.checked).map(radio => radio.name)
     ).size;
-    const textareas = Array.from(document.querySelectorAll(".qa-box textarea")).filter(visible);
-    const answeredQas = textareas.filter(t => t.value.trim() !== "").length;
-    const blanks = Array.from(document.querySelectorAll(".blank-box .blank-input")).filter(visible);
-    const answeredBlanks = blanks.filter(t => t.value.trim() !== "").length;
-    const total = totalChoices + textareas.length + blanks.length;
-    const answered = answeredChoices + answeredQas + answeredBlanks;
+    const checkboxes = Array.from(
+        document.querySelectorAll('.multi-box .options input[type="checkbox"]')
+    ).filter(visible);
+    const multiGroups = new Set(checkboxes.map(box => box.name));
+    const answeredMultis = new Set(
+        checkboxes.filter(box => box.checked).map(box => box.name)
+    ).size;
+    const total = singleGroups.size + multiGroups.size;
+    const answered = answeredSingles + answeredMultis;
     const progress = document.getElementById("exam-progress");
     if (progress) progress.textContent = `进度：${answered}/${total}`;
 }
@@ -276,21 +285,18 @@ function toggleMark(videoid, examid, marked) {
     }).catch(err => console.log('标记失败', err));
 }
 
-// 单题即时判分：客观题本地判分秒回，简答题需等待 AI 评分
+// 单题即时判分：三类客观题均为本地规则判分，秒回
 function judgeOne(videoid, examid, type) {
     const token = localStorage.getItem("token");
     const resultBox = document.getElementById(`judge-${examid}`);
     let answer = "";
-    if (type === "choice") {
-        const radio = document.querySelector(`input[name="choice-${examid}"]:checked`);
+    if (type === "choice" || type === "judge") {
+        const radio = document.querySelector(`input[name="${type}-${examid}"]:checked`);
         if (!radio) { resultBox.textContent = "请先选择答案"; return; }
         answer = radio.value.split("-")[2];
-    } else if (type === "blank") {
-        answer = document.getElementById(`blank-${examid}`).value.trim();
-        if (!answer) { resultBox.textContent = "请先填写答案"; return; }
-    } else {
-        answer = document.getElementById(`qa-${examid}`).value.trim();
-        if (!answer) { resultBox.textContent = "请先填写答案"; return; }
+    } else if (type === "multi") {
+        answer = collectMultiAnswer(examid);
+        if (!answer) { resultBox.textContent = "请至少勾选一个答案"; return; }
     }
     resultBox.textContent = "判分中...";
     fetch(`/api/practice/judge/${token}`, {
@@ -300,13 +306,15 @@ function judgeOne(videoid, examid, type) {
     })
     .then(response => response.json())
     .then(data => {
+        const standard = formatAnswer(type, data.answer);
         if (data["correct"]) {
             resultBox.textContent = `回答正确，得 ${data.score} 分`;
-        } else if (type === "qa") {
-            resultBox.textContent = `得分 ${data.score}，参考答案：${data.analysis}`;
+        } else if (type === "multi" && data.score > 0) {
+            resultBox.textContent =
+                `漏选，得 ${data.score} 分，标准答案：${standard}。解析：${data.analysis || "暂无"}`;
         } else {
             resultBox.textContent =
-                `回答错误，标准答案：${data.answer}。解析：${data.analysis || "暂无"}`;
+                `回答错误，标准答案：${standard}。解析：${data.analysis || "暂无"}`;
         }
     })
     .catch(err => { resultBox.textContent = "判分失败，请稍后重试"; console.log(err); });
@@ -331,38 +339,29 @@ function startExamTimer(videoid) {
     window.setInterval(tick, 1000);
 }
 
-// 提交后进入回顾模式：锁定所有输入，展示总分与每题得分
+// 提交后进入回顾模式：锁定所有输入，展示总分与客观题准确率
 function enterReviewMode(data) {
-    document.querySelectorAll('.choice-box input[type="radio"]').forEach(radio => {
-        radio.disabled = true;
-    });
-    document.querySelectorAll(".qa-box textarea").forEach(t => {
-        t.disabled = true;
-    });
-    document.querySelectorAll(".blank-box .blank-input").forEach(t => {
-        t.disabled = true;
-    });
+    document.querySelectorAll('.choice-box input[type="radio"], .judge-box input[type="radio"]')
+        .forEach(radio => { radio.disabled = true; });
+    document.querySelectorAll('.multi-box .options input[type="checkbox"]')
+        .forEach(box => { box.disabled = true; });
     document.querySelectorAll(".judge-line").forEach(line => {
         line.style.display = "none";
     });
     const submit = document.getElementById("submit");
     if (submit) submit.style.display = "none";
 
-    // 在统计栏展示总分与选择题准确率
-    let choiceTotal = 0, choiceCorrect = 0;
-    document.querySelectorAll(".choice-box").forEach(box => {
-        const radio = box.querySelector('input[type="radio"]');
-        if (!radio) return;
-        const examid = radio.name.split("-")[1];
-        choiceTotal += 1;
-        if ((data.scores || {})[examid] === 5) choiceCorrect += 1;
-    });
-    const accuracy = document.getElementById("exam-accuracy");
-    if (accuracy && choiceTotal > 0) {
-        accuracy.textContent = `选择题准确率：${choiceCorrect}/${choiceTotal}`;
+    // 在统计栏展示总分与客观题准确率（基于判分结果，多选半分不算对）
+    const results = data.results || [];
+    if (results.length > 0) {
+        const correct = results.filter(item => item.correct).length;
+        const accuracy = document.getElementById("exam-accuracy");
+        if (accuracy) accuracy.textContent = `客观题准确率：${correct}/${results.length}`;
     }
     const saveStatus = document.getElementById("save-status");
-    if (saveStatus) saveStatus.textContent = `已提交，总分 ${data.total} 分`;
+    if (saveStatus && data.total != null) {
+        saveStatus.textContent = `已提交，总分 ${data.total} 分`;
+    }
 }
 
 // 考试页初始化：恢复草稿、绑定实时保存、启动统计与计时；redo 模式只显示未掌握错题
@@ -374,15 +373,22 @@ function initExamPage(videoid) {
         .then(data => {
             const answers = data.answers || {};
             Object.keys(answers).forEach(examid => {
-                const answer = answers[examid];
+                const answer = String(answers[examid] || "");
+                // 单选/判断：答案即选项字母或 T/F
                 const radio = document.querySelector(
-                    `input[name="choice-${examid}"][value="choice-${examid}-${answer}"]`
+                    `input[name="choice-${examid}"][value="choice-${examid}-${answer}"],` +
+                    `input[name="judge-${examid}"][value="judge-${examid}-${answer}"]`
                 );
                 if (radio) radio.checked = true;
-                const textarea = document.getElementById(`qa-${examid}`);
-                if (textarea) textarea.value = answer;
-                const blank = document.getElementById(`blank-${examid}`);
-                if (blank) blank.value = answer;
+                // 多选：答案 "ABD" → 勾选对应 checkbox
+                if (document.querySelector(`input[name="multi-${examid}"]`)) {
+                    answer.split("").forEach(letter => {
+                        const box = document.querySelector(
+                            `input[name="multi-${examid}"][value="multi-${examid}-${letter}"]`
+                        );
+                        if (box) box.checked = true;
+                    });
+                }
             });
             (data.marked || []).forEach(examid => {
                 const box = document.getElementById(`mark-${examid}`);
@@ -395,28 +401,23 @@ function initExamPage(videoid) {
                 enterReviewMode(data);
             }
 
-            // 绑定实时保存：选项变更立即保存，文本输入防抖保存
-            document.querySelectorAll('.choice-box input[type="radio"]').forEach(radio => {
-                radio.addEventListener("change", () => {
-                    const examid = radio.name.split("-")[1];
-                    saveDraft(videoid, examid, radio.value.split("-")[2]);
-                    updateExamStats();
+            // 绑定实时保存：任何选项变更立即保存
+            document.querySelectorAll('.choice-box input[type="radio"], .judge-box input[type="radio"]')
+                .forEach(radio => {
+                    radio.addEventListener("change", () => {
+                        const examid = radio.name.split("-")[1];
+                        saveDraft(videoid, examid, radio.value.split("-")[2]);
+                        updateExamStats();
+                    });
                 });
-            });
-            document.querySelectorAll(".qa-box textarea").forEach(textarea => {
-                textarea.addEventListener("input", () => {
-                    const examid = textarea.id.split("-")[1];
-                    debouncedSaveDraft(videoid, examid, textarea.value);
-                    updateExamStats();
+            document.querySelectorAll('.multi-box .options input[type="checkbox"]')
+                .forEach(box => {
+                    box.addEventListener("change", () => {
+                        const examid = box.name.split("-")[1];
+                        saveDraft(videoid, examid, collectMultiAnswer(examid));
+                        updateExamStats();
+                    });
                 });
-            });
-            document.querySelectorAll(".blank-box .blank-input").forEach(input => {
-                input.addEventListener("input", () => {
-                    const examid = input.id.split("-")[1];
-                    debouncedSaveDraft(videoid, examid, input.value);
-                    updateExamStats();
-                });
-            });
 
             updateExamStats();
             startExamTimer(videoid);
@@ -440,7 +441,7 @@ function setupRedoMode(videoid, token) {
                 if (submit) submit.style.display = "none";
                 return;
             }
-            document.querySelectorAll(".choice-box, .qa-box, .blank-box").forEach(box => {
+            document.querySelectorAll(".choice-box, .multi-box, .judge-box").forEach(box => {
                 const examid = Number(box.id.split("-")[1]);
                 if (!wrongIds.has(examid)) box.style.display = "none";
             });
@@ -459,38 +460,38 @@ function doExam(videoid) {
     const mode = examMode();
     const visible = el => el.offsetParent !== null;
 
-    const radios = Array.from(
-        document.querySelectorAll('.choice-box input[type="radio"]')
-    ).filter(visible);
-    const totalChoices = new Set(radios.map(radio => radio.name)).size;
+    const answers = {"mode": mode};
+    const collected = [];
+
+    // 单选与判断：每组必须选中一个
+    const radios = Array.from(document.querySelectorAll(
+        '.choice-box input[type="radio"], .judge-box input[type="radio"]'
+    )).filter(visible);
+    const radioGroups = new Set(radios.map(radio => radio.name));
     const checkedRadios = radios.filter(radio => radio.checked);
-    if (checkedRadios.length < totalChoices) {
-        alert("你的选择题似乎未完成.");
+    if (checkedRadios.length < radioGroups.size) {
+        alert("还有单选或判断题未完成");
         return false;
     }
+    checkedRadios.forEach(radio => collected.push(radio.value));
 
-    let answers = {"mode": mode};
-    answers['choices'] = checkedRadios.map(radio => radio.value);
-
-    for (const input of document.querySelectorAll(".blank-box .blank-input")) {
-        if (!visible(input)) continue;
-        if (input.value.trim() === "") {
-            alert("请完成填空题的填写");
+    // 多选：每题至少勾选一个选项
+    const checkboxGroups = new Set(
+        Array.from(document.querySelectorAll('.multi-box .options input[type="checkbox"]'))
+            .filter(visible)
+            .map(box => box.name)
+    );
+    for (const name of checkboxGroups) {
+        const examid = name.split("-")[1];
+        const answer = collectMultiAnswer(examid);
+        if (!answer) {
+            alert("多选题请至少勾选一个选项");
             return false;
         }
-        answers[input.id] = input.value;
+        collected.push(`multi-${examid}-${answer}`);
     }
 
-    for (const textarea of document.getElementsByTagName("textarea")) {
-        if (!visible(textarea)) continue;
-        if (textarea.value.trim() === "") {
-            alert("请完成简答题的填写");
-            return false;
-        }
-        if (textarea.id) {
-            answers[textarea.id] = textarea.value;
-        }
-    }
+    answers["choices"] = collected;
 
     // 答题用时（秒），随提交上报用于学习统计
     const start = Number(localStorage.getItem(`exam-start-${videoid}`) || Date.now());

@@ -43,13 +43,14 @@ class Exams(SQLModel, table=True):
     examid: Optional[int] = Field(default=None, primary_key=True)
     videoid: Optional[int] = Field(default=None, foreign_key="videos.videoid", index=True)
     question: str
-    type: str
+    type: str  # choice=单选 / multi=多选 / judge=判断
     answer: str
     score: int
     options: Optional[str] = None
     knowledge_point: Optional[str] = Field(default=None, index=True)
     analysis: Optional[str] = None
-    alt_answers: Optional[str] = None  # 填空题备选答案，JSON 数组字符串
+    alt_answers: Optional[str] = None  # 已停用（历史填空题遗留列）
+    difficulty: Optional[int] = Field(default=None, index=True)  # 1 易 / 2 中 / 3 难
     createtime: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -64,6 +65,7 @@ class Scores(SQLModel, table=True):
     examid: Optional[int] = Field(default=None, foreign_key="exams.examid", index=True)
     answer: str
     score: int
+    mode: str = Field(default="exam")  # exam=首答 / redo=重练覆盖
     createtime: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -97,6 +99,9 @@ class WrongBook(SQLModel, table=True):
     wrong_count: int = Field(default=1)
     mastered: bool = Field(default=False)
     last_answer: str = ""
+    wrong_reason: Optional[str] = None  # AI 错因标签：概念混淆/知识盲区/粗心失误/方法错误
+    wrong_analysis: Optional[str] = None  # 针对本次错误答案的个性化解析
+    correct_streak: int = Field(default=0)  # 重练连续答对次数，达 2 自动标记掌握
     createtime: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
@@ -144,11 +149,29 @@ def _migrate() -> None:
             connection.exec_driver_sql("ALTER TABLE exams ADD COLUMN analysis TEXT")
         if "alt_answers" not in exam_columns:
             connection.exec_driver_sql("ALTER TABLE exams ADD COLUMN alt_answers TEXT")
+        if "difficulty" not in exam_columns:
+            connection.exec_driver_sql("ALTER TABLE exams ADD COLUMN difficulty INTEGER")
 
         answer_columns = _table_columns("answers")
         if "marked" not in answer_columns:
             connection.exec_driver_sql(
                 "ALTER TABLE answers ADD COLUMN marked BOOLEAN DEFAULT 0"
+            )
+
+        score_columns = _table_columns("scores")
+        if "mode" not in score_columns:
+            connection.exec_driver_sql(
+                "ALTER TABLE scores ADD COLUMN mode TEXT DEFAULT 'exam'"
+            )
+
+        wrong_columns = _table_columns("wrongbook")
+        if "wrong_reason" not in wrong_columns:
+            connection.exec_driver_sql("ALTER TABLE wrongbook ADD COLUMN wrong_reason TEXT")
+        if "wrong_analysis" not in wrong_columns:
+            connection.exec_driver_sql("ALTER TABLE wrongbook ADD COLUMN wrong_analysis TEXT")
+        if "correct_streak" not in wrong_columns:
+            connection.exec_driver_sql(
+                "ALTER TABLE wrongbook ADD COLUMN correct_streak INTEGER DEFAULT 0"
             )
 
         # 回填老题目的知识点：优先取所属视频关键词，兜底为「综合」
@@ -160,6 +183,26 @@ def _migrate() -> None:
         connection.exec_driver_sql(
             "UPDATE exams SET knowledge_point = '综合' WHERE knowledge_point IS NULL"
         )
+        # 存量题难度回填为「中」
+        connection.exec_driver_sql(
+            "UPDATE exams SET difficulty = 2 WHERE difficulty IS NULL"
+        )
+
+        # 纯客观题改造：清除历史填空/简答题及其关联作答记录
+        legacy_rows = connection.exec_driver_sql(
+            "SELECT examid FROM exams WHERE type IN ('blank', 'qa')"
+        ).fetchall()
+        legacy_ids = [row[0] for row in legacy_rows]
+        if legacy_ids:
+            placeholders = ", ".join("?" for _ in legacy_ids)
+            params = tuple(legacy_ids)
+            for table in ("answers", "scores", "wrongbook"):
+                connection.exec_driver_sql(
+                    f"DELETE FROM {table} WHERE examid IN ({placeholders})", params
+                )
+            connection.exec_driver_sql(
+                f"DELETE FROM exams WHERE examid IN ({placeholders})", params
+            )
 
 
 def init_database() -> None:
