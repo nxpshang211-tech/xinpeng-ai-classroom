@@ -34,8 +34,12 @@ from module import (
     aes_encrypt,
     check_token,
     gen_wrong_reason,
+    get_ai_config,
+    mask_api_key,
     process_video,
     retry_incomplete_videos,
+    save_ai_config,
+    test_text_connection,
 )
 
 
@@ -1051,6 +1055,76 @@ def wrongbook_page(request: Request):
 @app.get("/stats")
 def stats_page(request: Request):
     return templates.TemplateResponse(request=request, name="stats.html")
+
+
+@app.get("/settings")
+def settings_page(request: Request):
+    return templates.TemplateResponse(request=request, name="settings.html")
+
+
+@app.get("/api/settings/ai/{token}")
+def get_ai_settings(token: str):
+    if _auth_userid(token) is None:
+        return "Token-Fail"
+    config = get_ai_config()
+    return {
+        "text_provider": config.text_provider,
+        "text_base_url": config.text_base_url,
+        "text_api_key": mask_api_key(config.text_api_key),
+        "text_model": config.text_model,
+        "asr_provider": config.asr_provider,
+        "asr_base_url": config.asr_base_url,
+        "asr_api_key": mask_api_key(config.asr_api_key),
+        "asr_model": config.asr_model,
+        "asr_transport": config.asr_transport,
+    }
+
+
+@app.post("/api/settings/ai/{token}")
+def save_ai_settings(token: str, data: dict = Body()):
+    if _auth_userid(token) is None:
+        return "Token-Fail"
+    fields: dict[str, str] = {}
+    for name in ("text_base_url", "text_model", "asr_base_url", "asr_model"):
+        value = str(data.get(name, "")).strip()
+        if not value:
+            return {"message": "invalid-field", "detail": f"{name} 不能为空"}
+        fields[name] = value
+    fields["text_provider"] = str(data.get("text_provider", "")).strip() or "custom"
+    fields["asr_provider"] = str(data.get("asr_provider", "")).strip() or "custom"
+    fields["asr_transport"] = (
+        str(data.get("asr_transport", "")).strip().lower() or "base64"
+    )
+    if fields["asr_transport"] not in ("base64", "oss"):
+        return {"message": "invalid-field", "detail": "ASR 传输方式只支持 base64 或 oss"}
+    # Key 留空或原样传回脱敏值 = 不修改已保存的 Key
+    current = get_ai_config()
+    for name, old in (
+        ("text_api_key", current.text_api_key),
+        ("asr_api_key", current.asr_api_key),
+    ):
+        value = str(data.get(name, "")).strip()
+        fields[name] = old if not value or value == mask_api_key(old) else value
+    save_ai_config(**fields)
+    return {"message": "ok"}
+
+
+@app.post("/api/settings/ai/test/{token}")
+def test_ai_settings(token: str, data: dict = Body()):
+    """用提交的值发一条最小文本请求验证连通性（仅测文本模型）。"""
+    if _auth_userid(token) is None:
+        return "Token-Fail"
+    base_url = str(data.get("base_url", "")).strip()
+    model = str(data.get("model", "")).strip()
+    api_key = str(data.get("api_key", "")).strip()
+    if not base_url or not model:
+        return {"message": "invalid-field", "detail": "base_url 与 model 不能为空"}
+    if not api_key:
+        api_key = get_ai_config().text_api_key
+    error = test_text_connection(base_url, api_key, model)
+    if error:
+        return {"message": "fail", "detail": error}
+    return {"message": "ok"}
 
 
 if __name__ == "__main__":

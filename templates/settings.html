@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <title>AI智慧课堂-设置</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <script src="/static/script.js"></script>
+    <script>
+        document.addEventListener("DOMContentLoaded", () => { requireLogin(); initSettingsPage(); });
+    </script>
+</head>
+<body>
+  <div class="menu">
+      <div class="logo">欣鹏AI智慧课堂</div>
+      <div class="nav">
+          <a href="/">首页</a>
+          <a href="/bank">题库</a>
+          <a href="/wrongbook">错题本</a>
+          <a href="/stats">学习报告</a>
+          <a href="/settings">设置</a>
+      </div>
+      <div id="welcome"></div>
+  </div>
+
+  <div class="panel settings-panel">
+      <h2>文本模型</h2>
+      <p class="settings-tip">用于课堂笔记、思维导图、出题与错因分析（OpenAI 兼容接口）</p>
+      <div class="auth-field">
+          <label>供应商</label>
+          <select id="text-provider" onchange="applyPreset('text')">
+              <option value="dashscope">阿里云百炼（默认）</option>
+              <option value="volcengine">火山引擎·豆包方舟 ARK</option>
+              <option value="tencent">腾讯云·混元</option>
+              <option value="deepseek">DeepSeek</option>
+              <option value="kimi">Kimi·月之暗面</option>
+              <option value="custom">自定义</option>
+          </select>
+      </div>
+      <div class="auth-field">
+          <label>接口地址（Base URL）</label>
+          <input id="text-base-url" type="text" placeholder="https://dashscope.aliyuncs.com/compatible-mode/v1">
+      </div>
+      <div class="auth-field">
+          <label>API Key</label>
+          <input id="text-api-key" type="password" placeholder="已配置，留空表示不修改">
+      </div>
+      <div class="auth-field">
+          <label>模型</label>
+          <select id="text-model" onchange="onModelSelect('text')"></select>
+          <input id="text-model-input" type="text" style="display:none" placeholder="填写模型 ID">
+      </div>
+      <div class="settings-actions">
+          <button id="text-test-btn" onclick="testTextConnection()">测试连接</button>
+          <span id="text-test-result" class="field-tip"></span>
+      </div>
+  </div>
+
+  <div class="panel settings-panel">
+      <h2>语音转写（ASR）</h2>
+      <p class="settings-tip">用于课程视频转写。切换供应商会自动填充官方接口地址与常用模型</p>
+      <div class="auth-field">
+          <label>供应商</label>
+          <select id="asr-provider" onchange="applyPreset('asr')">
+              <option value="dashscope">阿里云百炼（默认）</option>
+              <option value="volcengine">火山引擎</option>
+              <option value="tencent">腾讯云</option>
+              <option value="custom">自定义（OpenAI 兼容）</option>
+          </select>
+      </div>
+      <div class="auth-field">
+          <label>接口地址（Base URL）</label>
+          <input id="asr-base-url" type="text" placeholder="https://dashscope.aliyuncs.com/compatible-mode/v1">
+      </div>
+      <div class="auth-field">
+          <label>API Key</label>
+          <input id="asr-api-key" type="password" placeholder="已配置，留空表示不修改">
+          <div class="field-tip" id="asr-key-tip"></div>
+      </div>
+      <div class="auth-field">
+          <label>模型</label>
+          <select id="asr-model" onchange="onModelSelect('asr')"></select>
+          <input id="asr-model-input" type="text" style="display:none" placeholder="填写模型 ID">
+      </div>
+      <div class="settings-tip" id="asr-unsupported-tip" style="display:none;color:#b42318;">
+          该供应商的语音转写协议尚未适配，转写将无法执行。请先使用阿里云百炼，或选择「自定义」接入支持音频输入的 OpenAI 兼容服务。
+      </div>
+      <div class="auth-field" id="asr-transport-field">
+          <label>传输方式（仅阿里云）</label>
+          <select id="asr-transport">
+              <option value="base64">base64（OpenAI 兼容接口）</option>
+              <option value="oss">oss（DashScope SDK 临时上传）</option>
+          </select>
+      </div>
+  </div>
+
+  <div class="panel settings-panel settings-save">
+      <button id="settings-save-btn" onclick="saveSettings()">保存全部配置</button>
+      <span id="settings-save-result" class="field-tip"></span>
+  </div>
+</body>
+</html>

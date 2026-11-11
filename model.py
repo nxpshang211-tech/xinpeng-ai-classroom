@@ -106,6 +106,26 @@ class WrongBook(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
+class AIConfig(SQLModel, table=True):
+    """全局 AI 模型配置（单行，id 固定为 1），由设置页维护。"""
+
+    __tablename__ = "aiconfig"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    # 文本模型（笔记/导图/出题/错因），走 OpenAI 兼容接口
+    text_provider: str = Field(default="dashscope")
+    text_base_url: str = ""
+    text_api_key: str = ""
+    text_model: str = ""
+    # 语音转写模型（ASR）
+    asr_provider: str = Field(default="dashscope")
+    asr_base_url: str = ""
+    asr_api_key: str = ""
+    asr_model: str = ""
+    asr_transport: str = Field(default="base64")  # dashscope 专属：base64 / oss
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
 class PracticeSessions(SQLModel, table=True):
     """练习/考试会话：每次交卷产生一条，用于成绩与用时统计。"""
 

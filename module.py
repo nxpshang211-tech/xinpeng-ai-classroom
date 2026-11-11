@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Any, Callable
 
 import cv2
-import dashscope
 import numpy as np
 import requests
 import xmind
@@ -21,7 +20,7 @@ from sqlmodel import Session, select
 from moviepy.editor import AudioFileClip, VideoFileClip
 
 from config import settings
-from model import Exams, Videos, WrongBook, engine
+from model import AIConfig, Exams, Videos, WrongBook, engine
 
 
 class PipelineError(RuntimeError):
@@ -54,10 +53,97 @@ def check_token(token: str) -> dict[str, str]:
         return {"message": "Token-Error"}
 
 
-def _require_dashscope_key() -> str:
-    if not settings.dashscope_api_key:
-        raise PipelineError("未配置 DASHSCOPE_API_KEY，请在 .env 中填写后重试")
-    return settings.dashscope_api_key
+_ai_config_cache: AIConfig | None = None
+
+
+def get_ai_config() -> AIConfig:
+    """读取全局 AI 配置（单行 id=1）；首次访问用 .env 值播种，带进程内缓存。"""
+    global _ai_config_cache
+    if _ai_config_cache is not None:
+        return _ai_config_cache
+    with Session(engine) as session:
+        config = session.get(AIConfig, 1)
+        if config is None:
+            config = AIConfig(
+                id=1,
+                text_base_url=settings.dashscope_compatible_base_url,
+                text_api_key=settings.dashscope_api_key,
+                text_model=settings.dashscope_text_model,
+                asr_base_url=settings.dashscope_compatible_base_url,
+                asr_api_key=settings.dashscope_api_key,
+                asr_model=settings.dashscope_asr_model,
+                asr_transport=settings.dashscope_asr_transport,
+            )
+            session.add(config)
+            session.commit()
+            session.refresh(config)
+        # commit 后属性会过期，refresh 加载后脱离 session，供长缓存使用
+        session.expunge(config)
+        _ai_config_cache = config
+    return config
+
+
+def invalidate_ai_config_cache() -> None:
+    global _ai_config_cache
+    _ai_config_cache = None
+
+
+def save_ai_config(**fields: str) -> AIConfig:
+    """设置页保存入口：更新单行配置并清缓存。"""
+    with Session(engine) as session:
+        config = session.get(AIConfig, 1)
+        if config is None:
+            config = AIConfig(id=1)
+            session.add(config)
+        for key, value in fields.items():
+            setattr(config, key, value)
+        config.updated_at = datetime.now(timezone.utc)
+        session.commit()
+    invalidate_ai_config_cache()
+    return get_ai_config()
+
+
+def mask_api_key(key: str) -> str:
+    """设置页回显用脱敏：保留前 3 位与后 4 位。"""
+    if not key:
+        return ""
+    if len(key) <= 7:
+        return "****"
+    return f"{key[:3]}****{key[-4:]}"
+
+
+def _require_asr_key() -> str:
+    config = get_ai_config()
+    if not config.asr_api_key:
+        raise PipelineError("未配置语音转写（ASR）API Key，请先在「设置」页填写")
+    return config.asr_api_key
+
+
+def test_text_connection(base_url: str, api_key: str, model: str) -> str | None:
+    """连通性测试：发一条最小 chat 请求，成功返回 None，失败返回原因。"""
+    try:
+        response = requests.post(
+            f"{base_url.rstrip('/')}/chat/completions",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": model,
+                "messages": [{"role": "user", "content": "ping"}],
+                "stream": False,
+            },
+            timeout=(10, 30),
+        )
+    except requests.RequestException as exc:
+        return f"连接失败：{exc}"
+    if response.status_code != 200:
+        try:
+            error = response.json()
+        except ValueError:
+            error = response.text
+        return f"HTTP {response.status_code}：{error}"
+    return None
 
 
 def _response_error(response: Any) -> str:
@@ -109,23 +195,38 @@ def _retry(operation: Callable[[], Any], attempts: int = 3) -> Any:
 
 
 def _call_text_model(system_prompt: str, user_prompt: str) -> str:
-    api_key = _require_dashscope_key()
+    config = get_ai_config()
+    if not config.text_api_key:
+        raise PipelineError("未配置文本模型 API Key，请先在「设置」页填写")
 
     def call():
-        response = dashscope.Generation.call(
-            api_key=api_key,
-            model=settings.dashscope_text_model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            result_format="message",
+        response = requests.post(
+            f"{config.text_base_url.rstrip('/')}/chat/completions",
+            headers={
+                "Authorization": f"Bearer {config.text_api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": config.text_model,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                "stream": False,
+            },
+            timeout=(20, 600),
         )
-        if getattr(response, "status_code", 200) != 200:
-            raise PipelineError(_response_error(response))
-        text = _extract_text(getattr(response, "output", response))
+        if response.status_code != 200:
+            try:
+                error = response.json()
+            except ValueError:
+                error = response.text
+            raise PipelineError(
+                f"文本模型调用失败 HTTP {response.status_code}：{error}"
+            )
+        text = _extract_text(response.json())
         if not text:
-            raise PipelineError("DashScope 返回了空文本")
+            raise PipelineError("文本模型返回了空文本")
         return text
 
     return _retry(call)
@@ -192,11 +293,25 @@ def _transcribe_audio_file(audio_path: Path, api_key: str) -> str:
             f"音频分片仍超过 {settings.dashscope_asr_max_mb} MB：{audio_path.name}"
         )
 
+    config = get_ai_config()
+    provider = config.asr_provider or "dashscope"
+    if provider == "dashscope":
+        transport = config.asr_transport.lower()
+    elif provider == "custom":
+        # 自定义：按 OpenAI 兼容音频输入协议调用
+        transport = "base64"
+    else:
+        label = {"volcengine": "火山引擎", "tencent": "腾讯云"}.get(provider, provider)
+        raise PipelineError(
+            f"语音转写（ASR）供应商「{label}」尚未适配：该厂商使用异步任务协议，"
+            "请在「设置」页改用阿里云百炼或自定义 OpenAI 兼容服务"
+        )
+
     def call():
-        if settings.dashscope_asr_transport.lower() == "oss":
+        if transport == "oss":
             response = MultiModalConversation.call(
                 api_key=api_key,
-                model=settings.dashscope_asr_model,
+                model=config.asr_model,
                 messages=[
                     {
                         "role": "user",
@@ -208,33 +323,35 @@ def _transcribe_audio_file(audio_path: Path, api_key: str) -> str:
             if getattr(response, "status_code", 200) != 200:
                 raise PipelineError(_response_error(response))
             text = _extract_text(getattr(response, "output", response))
-        elif settings.dashscope_asr_transport.lower() == "base64":
+        elif transport == "base64":
             encoded = base64.b64encode(audio_path.read_bytes()).decode("ascii")
             data_uri = f"data:audio/mpeg;base64,{encoded}"
+            payload: dict[str, Any] = {
+                "model": config.asr_model,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "input_audio",
+                                "input_audio": {
+                                    "data": data_uri,
+                                },
+                            }
+                        ],
+                    }
+                ],
+                "stream": False,
+            }
+            if config.asr_provider == "dashscope":
+                payload["asr_options"] = {"enable_itn": True}
             response = requests.post(
-                f"{settings.dashscope_compatible_base_url}/chat/completions",
+                f"{config.asr_base_url.rstrip('/')}/chat/completions",
                 headers={
                     "Authorization": f"Bearer {api_key}",
                     "Content-Type": "application/json",
                 },
-                json={
-                    "model": settings.dashscope_asr_model,
-                    "messages": [
-                        {
-                            "role": "user",
-                            "content": [
-                                {
-                                    "type": "input_audio",
-                                    "input_audio": {
-                                        "data": data_uri,
-                                    },
-                                }
-                            ],
-                        }
-                    ],
-                    "stream": False,
-                    "asr_options": {"enable_itn": True},
-                },
+                json=payload,
                 timeout=(20, 600),
             )
             if response.status_code != 200:
@@ -243,15 +360,13 @@ def _transcribe_audio_file(audio_path: Path, api_key: str) -> str:
                 except ValueError:
                     error = response.text
                 raise PipelineError(
-                    f"DashScope ASR HTTP {response.status_code}：{error}"
+                    f"ASR HTTP {response.status_code}：{error}"
                 )
             text = _extract_text(response.json())
         else:
-            raise PipelineError(
-                "DASHSCOPE_ASR_TRANSPORT 只支持 base64 或 oss"
-            )
+            raise PipelineError("ASR 传输方式只支持 base64 或 oss")
         if not text:
-            raise PipelineError(f"Qwen ASR 返回了空转写结果：{audio_path.name}")
+            raise PipelineError(f"ASR 返回了空转写结果：{audio_path.name}")
         return text
 
     return _retry(call, attempts=settings.dashscope_asr_retries)
@@ -328,7 +443,7 @@ def audio_text(
     filename: str,
     progress_callback: Callable[[int, int], None] | None = None,
 ) -> str:
-    api_key = _require_dashscope_key()
+    api_key = _require_asr_key()
     audio_path = (settings.static_dir / "videos" / filename).resolve()
     if not audio_path.exists():
         raise PipelineError(f"找不到待识别音频：{audio_path.name}")

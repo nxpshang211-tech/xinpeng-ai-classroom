@@ -708,6 +708,64 @@ def main() -> None:
             assert listed["total"] == 0
             print("bank CRUD: OK")
 
+            # AI 设置页：配置播种、脱敏返回、保存与「留空不改 Key」
+            assert client.get("/settings").status_code == 200
+            conf = client.get(f"/api/settings/ai/{token}").json()
+            assert conf["text_provider"] == "dashscope"  # 首次访问已从 .env 播种
+            assert conf["text_api_key"] == ""  # 测试环境 Key 为空
+            deepseek_payload = {
+                "text_provider": "deepseek",
+                "text_base_url": "https://api.deepseek.com/v1",
+                "text_api_key": "sk-test-key-123456",
+                "text_model": "deepseek-chat",
+                "asr_provider": "dashscope",
+                "asr_base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                "asr_api_key": "",
+                "asr_model": "qwen3-asr-flash",
+                "asr_transport": "base64",
+            }
+            saved = client.post(
+                f"/api/settings/ai/{token}", json=deepseek_payload
+            ).json()
+            assert saved["message"] == "ok", saved
+            conf = client.get(f"/api/settings/ai/{token}").json()
+            assert conf["text_api_key"] == "sk-****3456"  # 脱敏返回
+            assert conf["text_provider"] == "deepseek"
+            # 留空 Key 保存 = 不修改已保存的 Key
+            keep_payload = dict(deepseek_payload, text_api_key="")
+            saved = client.post(f"/api/settings/ai/{token}", json=keep_payload).json()
+            assert saved["message"] == "ok"
+            conf = client.get(f"/api/settings/ai/{token}").json()
+            assert conf["text_api_key"] == "sk-****3456"
+            # 必填字段缺失被拒、未登录拦截
+            bad = client.post(
+                f"/api/settings/ai/{token}",
+                json={"text_base_url": "", "text_model": "",
+                      "asr_base_url": "", "asr_model": ""},
+            ).json()
+            assert bad["message"] == "invalid-field"
+            assert client.get("/api/settings/ai/bad-token").json() == "Token-Fail"
+
+            # 文本模型调用命中自定义配置：base_url 与 model 均取数据库值
+            class FakeChatResponse:
+                status_code = 200
+
+                def json(self):
+                    return {"choices": [{"message": {"content": "pong"}}]}
+
+            captured = {}
+
+            def fake_post(url, **kwargs):
+                captured["url"] = url
+                captured["payload"] = kwargs.get("json")
+                return FakeChatResponse()
+
+            with patch.object(service.requests, "post", side_effect=fake_post):
+                assert service._call_text_model("sys", "user") == "pong"
+            assert captured["url"] == "https://api.deepseek.com/v1/chat/completions"
+            assert captured["payload"]["model"] == "deepseek-chat"
+            print("ai settings: OK")
+
             response = client.post(
                 "/upload",
                 data={"title": "无Key测试"},
@@ -724,7 +782,7 @@ def main() -> None:
                 time.sleep(0.5)
             assert status is not None and status["status"] == "failed", status
             assert status["stage"] == "transcribing", status
-            assert "DASHSCOPE_API_KEY" in status["error"], status
+            assert "ASR" in status["error"], status
 
             retried = client.post(f"/api/videos/{uploaded_id}/retry")
             assert retried.status_code == 202, retried.text

@@ -536,3 +536,203 @@ function doExam(videoid) {
     })
     .catch(err => console.log('请求失败', err));
 }
+
+// ===== 设置页：AI 模型配置 =====
+// 供应商预设：选中后自动填 base_url 与推荐模型列表，Key 始终手填；模型可下拉选也可自行输入
+const AI_PRESETS = {
+    text: {
+        dashscope: {base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            models: ["qwen-max", "qwen-plus", "qwen-flash", "qwen-long"]},
+        // 火山方舟自 2026-08 起必须填推理接入点 Endpoint ID，直接传模型名会 403/404
+        volcengine: {base_url: "https://ark.cn-beijing.volces.com/api/v3",
+            models: [], manual: true,
+            placeholder: "ep-20260806111300-abcde（接入点 ID，非模型名）"},
+        tencent: {base_url: "https://api.hunyuan.cloud.tencent.com/v1",
+            models: ["hunyuan-turbos-latest", "hunyuan-t1-latest", "hunyuan-lite"]},
+        deepseek: {base_url: "https://api.deepseek.com/v1",
+            models: ["deepseek-flash", "deepseek-v4-pro"]},
+        kimi: {base_url: "https://api.moonshot.cn/v1",
+            models: ["kimi-k3.1-pro", "kimi-k3.1-pro-highspeed", "kimi-k3"]},
+        custom: {base_url: "", models: [], manual: true}
+    },
+    asr: {
+        dashscope: {base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            models: ["qwen3-asr-flash", "qwen3-asr-plus", "qwen2-asr-flash"],
+            key_tip: "直接填写 DashScope API Key", ready: true},
+        volcengine: {base_url: "https://openspeech.bytedance.com/api/v3/auc/bigmodel",
+            models: ["bigmodel", "seedasr"],
+            key_tip: "填写格式为 AccessKeyID,AccessKeySecret", ready: false},
+        tencent: {base_url: "https://asr.tencentcloudapi.com",
+            models: ["16k_zh_edu", "16k_zh_video", "16k_zh"],
+            key_tip: "填写格式为 SecretId,SecretKey", ready: false},
+        custom: {base_url: "", models: [], manual: true,
+            key_tip: "填写该服务的 API Key", ready: true}
+    }
+};
+
+// 读取当前模型值：输入框可见时读 input，否则读下拉
+function readModelValue(kind) {
+    const select = document.getElementById(`${kind}-model`);
+    const input = document.getElementById(`${kind}-model-input`);
+    if (input.style.display !== "none") return input.value.trim();
+    return select.value === "__custom__" ? "" : select.value.trim();
+}
+
+// 下拉选中「使用其他模型…」时切换为输入框，其余选项切回下拉
+function onModelSelect(kind) {
+    const select = document.getElementById(`${kind}-model`);
+    const input = document.getElementById(`${kind}-model-input`);
+    if (select.value === "__custom__") {
+        input.style.display = "block";
+        input.value = "";
+        input.focus();
+    } else {
+        input.style.display = "none";
+        input.value = "";
+    }
+}
+
+// 切换供应商预设：自动填 base_url；重建模型候选且不预选；手填型供应商改用输入框
+function applyPreset(kind) {
+    const provider = document.getElementById(`${kind}-provider`).value;
+    const preset = AI_PRESETS[kind][provider] || AI_PRESETS[kind].custom;
+    document.getElementById(`${kind}-base-url`).value = preset.base_url;
+
+    const select = document.getElementById(`${kind}-model`);
+    const input = document.getElementById(`${kind}-model-input`);
+    let options = preset.models.map(m => `<option value="${m}">${m}</option>`).join("");
+    // 预设供应商在下拉末尾追加「使用其他模型…」，允许填列表外的模型
+    if (!preset.manual) {
+        options += '<option value="__custom__">使用其他模型…</option>';
+    }
+    select.innerHTML = options;
+    // 默认选中第一个模型
+    select.value = preset.models[0] || "";
+    input.value = "";
+    input.placeholder = preset.placeholder || "填写模型 ID";
+    select.style.display = preset.manual ? "none" : "block";
+    input.style.display = preset.manual ? "block" : "none";
+
+    if (kind === "asr") {
+        document.getElementById("asr-transport-field").style.display =
+            provider === "dashscope" ? "block" : "none";
+        document.getElementById("asr-key-tip").textContent = preset.key_tip || "";
+        document.getElementById("asr-unsupported-tip").style.display =
+            preset.ready === false ? "block" : "none";
+    }
+}
+
+// 页面加载：拉取当前配置回显（Key 为脱敏值，留空保存则不修改）
+function initSettingsPage() {
+    const token = localStorage.getItem("token");
+    fetch(`/api/settings/ai/${token}`)
+    .then(response => response.json())
+    .then(data => {
+        if (typeof data !== "object" || data === null) return;
+        // 已保存的供应商不在预设列表（如旧版遗留值）时归为「自定义」
+        for (const kind of ["text", "asr"]) {
+            const select = document.getElementById(`${kind}-provider`);
+            const saved = data[`${kind}_provider`] || "dashscope";
+            select.value = select.querySelector(`option[value="${saved}"]`) ? saved : "custom";
+        }
+        document.getElementById("text-api-key").value = data.text_api_key || "";
+        document.getElementById("asr-api-key").value = data.asr_api_key || "";
+        document.getElementById("asr-transport").value = data.asr_transport || "base64";
+        // applyPreset 会按预设覆盖 base_url/model，调用后恢复为已保存的值
+        const keep = {
+            text: {url: data.text_base_url || "", model: data.text_model || ""},
+            asr: {url: data.asr_base_url || "", model: data.asr_model || ""}
+        };
+        applyPreset("text");
+        applyPreset("asr");
+        for (const kind of ["text", "asr"]) {
+            document.getElementById(`${kind}-base-url`).value = keep[kind].url;
+            const select = document.getElementById(`${kind}-model`);
+            const input = document.getElementById(`${kind}-model-input`);
+            const savedModel = keep[kind].model;
+            if (input.style.display !== "none") {
+                input.value = savedModel;
+            } else if (savedModel) {
+                if ([...select.options].some(option => option.value === savedModel)) {
+                    select.value = savedModel;
+                } else {
+                    // 已保存模型不在候选列表：切到「使用其他模型…」并回填
+                    select.value = "__custom__";
+                    input.value = savedModel;
+                    input.style.display = "block";
+                }
+            }
+        }
+    })
+    .catch(err => console.log("加载配置失败", err));
+}
+
+function collectSettings() {
+    return {
+        text_provider: document.getElementById("text-provider").value,
+        text_base_url: document.getElementById("text-base-url").value.trim(),
+        text_api_key: document.getElementById("text-api-key").value.trim(),
+        text_model: readModelValue("text"),
+        asr_provider: document.getElementById("asr-provider").value,
+        asr_base_url: document.getElementById("asr-base-url").value.trim(),
+        asr_api_key: document.getElementById("asr-api-key").value.trim(),
+        asr_model: readModelValue("asr"),
+        asr_transport: document.getElementById("asr-transport").value
+    };
+}
+
+function saveSettings() {
+    const token = localStorage.getItem("token");
+    const resultBox = document.getElementById("settings-save-result");
+    const payload = collectSettings();
+    if (!payload.text_base_url || !payload.text_model ||
+        !payload.asr_base_url || !payload.asr_model) {
+        resultBox.textContent = "接口地址与模型名不能为空";
+        resultBox.className = "field-tip tip-err";
+        return;
+    }
+    fetch(`/api/settings/ai/${token}`, {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(payload)
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.message === "ok") {
+            resultBox.textContent = "已保存，立即生效";
+            resultBox.className = "field-tip tip-ok";
+        } else {
+            resultBox.textContent = data.detail || "保存失败";
+            resultBox.className = "field-tip tip-err";
+        }
+    })
+    .catch(err => { resultBox.textContent = "保存失败，请稍后重试"; console.log(err); });
+}
+
+// 用当前表单里的文本模型配置发一条 ping 请求验证连通性
+function testTextConnection() {
+    const token = localStorage.getItem("token");
+    const resultBox = document.getElementById("text-test-result");
+    resultBox.textContent = "测试中...";
+    resultBox.className = "field-tip";
+    fetch(`/api/settings/ai/test/${token}`, {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({
+            base_url: document.getElementById("text-base-url").value.trim(),
+            api_key: document.getElementById("text-api-key").value.trim(),
+            model: readModelValue("text")
+        })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.message === "ok") {
+            resultBox.textContent = "连接成功";
+            resultBox.className = "field-tip tip-ok";
+        } else {
+            resultBox.textContent = data.detail || "连接失败";
+            resultBox.className = "field-tip tip-err";
+        }
+    })
+    .catch(err => { resultBox.textContent = "连接失败，请检查网络"; console.log(err); });
+}
