@@ -6,4 +6,8 @@ data/*.db
 data/asr_chunks/
 static/videos/*.mp4
 static/videos/*.mp3
-static/frames/*.building/
+static/frames/
+static/xminds/
+ori_videos/
+.trae-html-share-packages/
+course.sql
