@@ -15,15 +15,29 @@
     text-align: left;
 }
 .menu #welcome {
-    width: 200px;
+    width: 280px;
     height: 50px;
     line-height: 50px;
     margin-top: 15px;
     margin-right: 10px;
     float: right;
     text-align: right;
-    cursor: pointer;
     color: #337ab7
+}
+.menu .auth-btn {
+    height: 32px;
+    padding: 0 14px;
+    margin-left: 8px;
+    font-size: 14px;
+    background-color: #337ab7;
+    color: whitesmoke;
+    border: 0;
+    border-radius: 4px;
+    cursor: pointer;
+    vertical-align: middle;
+}
+.menu .auth-btn:hover {
+    background-color: #286090;
 }
 
 .upload {

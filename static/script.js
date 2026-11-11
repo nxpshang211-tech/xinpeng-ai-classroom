@@ -1,8 +1,15 @@
 // 全局登录状态校验：所有业务页面加载时调用
 // 未登录或 Token 无效/过期时立即跳转登录页；已登录则直接放行并显示欢迎语
+function renderAuthBox(html) {
+    const welcome = document.getElementById("welcome");
+    if (welcome) welcome.innerHTML = html;
+}
+
 function requireLogin() {
     const token = localStorage.getItem("token");
     if (token == null) {
+        // 先渲染出登录按钮，再跳转，避免出现「页面上完全没有登录入口」的空窗
+        renderAuthBox('<button class="auth-btn" onclick="location.href=\'/login\'">登录</button>');
         location.replace("/login");
         return;
     }
@@ -15,14 +22,14 @@ function requireLogin() {
     .then(data => {
         if (data["message"] !== "Token-OK") {
             localStorage.clear();
+            renderAuthBox('<button class="auth-btn" onclick="location.href=\'/login\'">登录</button>');
             location.replace("/login");
             return;
         }
-        const welcome = document.getElementById("welcome");
-        if (welcome) {
-            welcome.innerHTML = "你好，" + data["realname"] +
-                '&nbsp;&nbsp;<a href="#" onclick="doLogout()">退出</a>';
-        }
+        renderAuthBox(
+            '你好，' + data["realname"] +
+            '&nbsp;<button class="auth-btn" onclick="doLogout()">退出登录</button>'
+        );
     })
     .catch(err => console.log('登录校验请求失败', err));
 }
