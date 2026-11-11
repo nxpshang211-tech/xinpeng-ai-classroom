@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>题库管理</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <script src="/static/script.js"></script>
+    <script>
+        document.addEventListener("DOMContentLoaded", () => { requireLogin(); loadBank(); });
+    </script>
+</head>
+<body>
+    <div class="menu">
+      <div class="logo">欣鹏AI智慧课堂</div>
+      <div class="nav">
+          <a href="/">首页</a>
+          <a href="/bank">题库</a>
+          <a href="/wrongbook">错题本</a>
+          <a href="/stats">学习报告</a>
+      </div>
+      <div id="welcome"></div>
+    </div>
+
+    <div class="panel">
+        题型：<select id="filter-type" onchange="loadBank()">
+            <option value="">全部</option>
+            <option value="choice">选择题</option>
+            <option value="blank">填空题</option>
+            <option value="qa">简答题</option>
+        </select>
+        知识点：<select id="filter-kp" onchange="loadBank()"><option value="">全部</option></select>
+        关键词：<input type="text" id="filter-keyword" oninput="debouncedBankSearch()">
+        <button onclick="showBankForm()">新增题目</button>
+    </div>
+
+    <div class="panel" id="bank-form" style="display:none;">
+        <h3 id="bank-form-title">新增题目</h3>
+        <input type="hidden" id="form-examid">
+        <div>题型：
+            <select id="form-type" onchange="renderBankTypeFields()">
+                <option value="choice">选择题</option>
+                <option value="blank">填空题</option>
+                <option value="qa">简答题</option>
+            </select>
+        </div>
+        <div>题干：<input type="text" id="form-question" style="width:500px"></div>
+        <div id="form-choice-fields">
+            选项A：<input type="text" id="opt-A">
+            选项B：<input type="text" id="opt-B">
+            选项C：<input type="text" id="opt-C">
+            选项D：<input type="text" id="opt-D">
+            答案：<select id="form-answer-choice">
+                <option>A</option><option>B</option><option>C</option><option>D</option>
+            </select>
+        </div>
+        <div id="form-blank-fields" style="display:none;">
+            标准答案：<input type="text" id="form-answer-blank">
+            备选答案（逗号分隔）：<input type="text" id="form-alt-answers">
+        </div>
+        <div id="form-qa-fields" style="display:none;">
+            参考答案：<input type="text" id="form-answer-qa" style="width:500px">
+        </div>
+        <div>知识点：<input type="text" id="form-kp"></div>
+        <div>分值（留空取默认 5/10/20）：<input type="text" id="form-score"></div>
+        <div>解析（可空）：<input type="text" id="form-analysis" style="width:500px"></div>
+        <button onclick="saveBankItem()">保存</button>
+        <button onclick="hideBankForm()">取消</button>
+    </div>
+
+    <table>
+        <thead>
+        <tr>
+            <td>编号</td><td>题干</td><td>题型</td><td>知识点</td>
+            <td>分值</td><td>所属视频</td><td>操作</td>
+        </tr>
+        </thead>
+        <tbody id="bank-tbody"></tbody>
+    </table>
+
+    <script>
+        const TYPE_NAMES = {choice: "选择题", blank: "填空题", qa: "简答题"};
+        let bankItems = [];
+        let bankTimer = null;
+
+        function debouncedBankSearch() {
+            clearTimeout(bankTimer);
+            bankTimer = setTimeout(loadBank, 500);
+        }
+
+        function loadBank() {
+            const params = new URLSearchParams();
+            if (document.getElementById("filter-type").value)
+                params.set("type", document.getElementById("filter-type").value);
+            if (document.getElementById("filter-kp").value)
+                params.set("knowledge_point", document.getElementById("filter-kp").value);
+            if (document.getElementById("filter-keyword").value.trim())
+                params.set("keyword", document.getElementById("filter-keyword").value.trim());
+            fetch("/api/bank/list?" + params.toString())
+                .then(r => r.json())
+                .then(data => {
+                    bankItems = data.items;
+                    const tbody = document.getElementById("bank-tbody");
+                    tbody.innerHTML = data.items.map(item =>
+                        `<tr><td>${item.examid}</td>` +
+                        `<td>${item.question.slice(0, 40)}</td>` +
+                        `<td>${TYPE_NAMES[item.type] || item.type}</td>` +
+                        `<td>${item.knowledge_point}</td>` +
+                        `<td>${item.score}</td>` +
+                        `<td>${item.videotitle || "公共题库"}</td>` +
+                        `<td><a href="#" onclick='editBankItem(${item.examid});return false;'>编辑</a> ` +
+                        `<a href="#" onclick="deleteBankItem(${item.examid});return false;">删除</a></td></tr>`
+                    ).join("");
+                });
+            fetch("/api/bank/knowledge-points")
+                .then(r => r.json())
+                .then(data => {
+                    const select = document.getElementById("filter-kp");
+                    const current = select.value;
+                    select.innerHTML = '<option value="">全部</option>' +
+                        data.items.map(kp => `<option>${kp}</option>`).join("");
+                    select.value = current;
+                });
+        }
+
+        function renderBankTypeFields() {
+            const type = document.getElementById("form-type").value;
+            document.getElementById("form-choice-fields").style.display = type === "choice" ? "" : "none";
+            document.getElementById("form-blank-fields").style.display = type === "blank" ? "" : "none";
+            document.getElementById("form-qa-fields").style.display = type === "qa" ? "" : "none";
+        }
+
+        function showBankForm() {
+            document.getElementById("bank-form-title").textContent = "新增题目";
+            document.getElementById("form-examid").value = "";
+            document.getElementById("form-question").value = "";
+            document.getElementById("form-kp").value = "";
+            document.getElementById("form-score").value = "";
+            document.getElementById("form-analysis").value = "";
+            document.getElementById("form-answer-blank").value = "";
+            document.getElementById("form-alt-answers").value = "";
+            document.getElementById("form-answer-qa").value = "";
+            document.getElementById("bank-form").style.display = "";
+            renderBankTypeFields();
+        }
+
+        function hideBankForm() {
+            document.getElementById("bank-form").style.display = "none";
+        }
+
+        function editBankItem(examid) {
+            const item = bankItems.find(x => x.examid === examid);
+            if (!item) return;
+            showBankForm();
+            document.getElementById("bank-form-title").textContent = "编辑题目 #" + examid;
+            document.getElementById("form-examid").value = examid;
+            document.getElementById("form-type").value = item.type;
+            document.getElementById("form-question").value = item.question;
+            document.getElementById("form-kp").value = item.knowledge_point;
+            document.getElementById("form-score").value = item.score;
+            document.getElementById("form-analysis").value = item.analysis || "";
+            if (item.type === "choice") {
+                document.getElementById("opt-A").value = item.options.A;
+                document.getElementById("opt-B").value = item.options.B;
+                document.getElementById("opt-C").value = item.options.C;
+                document.getElementById("opt-D").value = item.options.D;
+                document.getElementById("form-answer-choice").value = item.answer;
+            } else if (item.type === "blank") {
+                document.getElementById("form-answer-blank").value = item.answer;
+                document.getElementById("form-alt-answers").value = (item.alt_answers || []).join(",");
+            } else {
+                document.getElementById("form-answer-qa").value = item.answer;
+            }
+            renderBankTypeFields();
+        }
+
+        function saveBankItem() {
+            const token = localStorage.getItem("token");
+            const type = document.getElementById("form-type").value;
+            const body = {
+                question: document.getElementById("form-question").value,
+                type: type,
+                knowledge_point: document.getElementById("form-kp").value,
+                analysis: document.getElementById("form-analysis").value,
+            };
+            const score = document.getElementById("form-score").value.trim();
+            if (score) body.score = Number(score);
+            if (type === "choice") {
+                body.options = {
+                    A: document.getElementById("opt-A").value,
+                    B: document.getElementById("opt-B").value,
+                    C: document.getElementById("opt-C").value,
+                    D: document.getElementById("opt-D").value,
+                };
+                body.answer = document.getElementById("form-answer-choice").value;
+            } else if (type === "blank") {
+                body.answer = document.getElementById("form-answer-blank").value;
+                body.alt_answers = document.getElementById("form-alt-answers").value
+                    .split(",").map(s => s.trim()).filter(s => s);
+            } else {
+                body.answer = document.getElementById("form-answer-qa").value;
+            }
+            const examid = document.getElementById("form-examid").value;
+            const url = examid ? `/api/bank/update/${examid}/${token}` : `/api/bank/add/${token}`;
+            fetch(url, {
+                method: "POST",
+                headers: {"Content-Type": "application/json"},
+                body: JSON.stringify(body)
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.message === "ok") {
+                    hideBankForm();
+                    loadBank();
+                } else if (data === "Token-Fail") {
+                    localStorage.clear(); location.replace("/login");
+                } else {
+                    alert("保存失败：" + (data.detail || data.message));
+                }
+            });
+        }
+
+        function deleteBankItem(examid) {
+            if (!confirm("确定删除题目 #" + examid + "？相关答题记录会一并删除")) return;
+            const token = localStorage.getItem("token");
+            fetch(`/api/bank/delete/${examid}/${token}`, {method: "POST"})
+                .then(r => r.json())
+                .then(() => loadBank());
+        }
+    </script>
+</body>
+</html>

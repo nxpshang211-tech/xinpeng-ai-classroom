@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>学习报告</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <script src="/static/script.js"></script>
+    <script>
+        document.addEventListener("DOMContentLoaded", () => { requireLogin(); loadStats(); });
+    </script>
+</head>
+<body>
+    <div class="menu">
+      <div class="logo">欣鹏AI智慧课堂</div>
+      <div class="nav">
+          <a href="/">首页</a>
+          <a href="/bank">题库</a>
+          <a href="/wrongbook">错题本</a>
+          <a href="/stats">学习报告</a>
+      </div>
+      <div id="welcome"></div>
+    </div>
+
+    <div class="panel" id="stats-summary">加载中...</div>
+
+    <div class="panel">
+        <h3>知识点掌握情况</h3>
+        <table>
+            <thead><tr><td>知识点</td><td>答题数</td><td>答对</td><td>正确率</td></tr></thead>
+            <tbody id="kp-tbody"></tbody>
+        </table>
+    </div>
+
+    <div class="panel">
+        <h3>题型正确率</h3>
+        <table>
+            <thead><tr><td>题型</td><td>答题数</td><td>答对</td><td>正确率</td></tr></thead>
+            <tbody id="type-tbody"></tbody>
+        </table>
+    </div>
+
+    <div class="panel">
+        <h3>最近练习记录</h3>
+        <table>
+            <thead><tr><td>时间</td><td>课程</td><td>模式</td><td>题数</td><td>答对</td><td>得分</td><td>用时</td></tr></thead>
+            <tbody id="session-tbody"></tbody>
+        </table>
+    </div>
+
+    <script>
+        const TYPE_NAMES = {choice: "选择题", blank: "填空题", qa: "简答题"};
+        const MODE_NAMES = {exam: "整卷练习", redo: "错题重练"};
+
+        function accuracyBar(accuracy) {
+            const percent = Math.round(accuracy * 100);
+            const blocks = Math.round(percent / 10);
+            const color = percent < 60 ? "#b42318" : "darkgreen";
+            return `<span style="color:${color}">${"█".repeat(blocks)}${"░".repeat(10 - blocks)} ${percent}%</span>`;
+        }
+
+        function formatDuration(seconds) {
+            const mm = Math.floor(seconds / 60);
+            const ss = seconds % 60;
+            return mm > 0 ? `${mm}分${ss}秒` : `${ss}秒`;
+        }
+
+        function loadStats() {
+            const token = localStorage.getItem("token");
+            fetch(`/api/stats/overview/${token}`)
+                .then(r => r.json())
+                .then(data => {
+                    const s = data.summary;
+                    document.getElementById("stats-summary").innerHTML =
+                        `累计答题 <b>${s.total_answers}</b> 道 ｜ ` +
+                        `总正确率 <b>${Math.round(s.accuracy * 100)}%</b> ｜ ` +
+                        `累计用时 <b>${formatDuration(s.total_duration_seconds)}</b> ｜ ` +
+                        `待复习错题 <b>${s.pending_wrong}</b> 道`;
+
+                    document.getElementById("kp-tbody").innerHTML =
+                        data.by_knowledge_point.map(item =>
+                            `<tr><td>${item.knowledge_point}</td><td>${item.total}</td>` +
+                            `<td>${item.correct}</td><td>${accuracyBar(item.accuracy)}</td></tr>`
+                        ).join("") || '<tr><td colspan="4">暂无数据</td></tr>';
+
+                    document.getElementById("type-tbody").innerHTML =
+                        data.by_type.map(item =>
+                            `<tr><td>${TYPE_NAMES[item.type] || item.type}</td><td>${item.total}</td>` +
+                            `<td>${item.correct}</td><td>${accuracyBar(item.accuracy)}</td></tr>`
+                        ).join("") || '<tr><td colspan="4">暂无数据</td></tr>';
+
+                    document.getElementById("session-tbody").innerHTML =
+                        data.recent_sessions.map(item =>
+                            `<tr><td>${item.createtime.slice(0, 19).replace("T", " ")}</td>` +
+                            `<td>${item.videotitle || "-"}</td>` +
+                            `<td>${MODE_NAMES[item.mode] || item.mode}</td>` +
+                            `<td>${item.total_questions}</td><td>${item.correct_count}</td>` +
+                            `<td>${item.total_score}</td><td>${formatDuration(item.duration_seconds)}</td></tr>`
+                        ).join("") || '<tr><td colspan="7">暂无数据</td></tr>';
+                });
+        }
+    </script>
+</body>
+</html>

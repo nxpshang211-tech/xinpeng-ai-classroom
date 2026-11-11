@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>错题本</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <script src="/static/script.js"></script>
+    <script>
+        document.addEventListener("DOMContentLoaded", () => { requireLogin(); loadWrongbook(); });
+    </script>
+</head>
+<body>
+    <div class="menu">
+      <div class="logo">欣鹏AI智慧课堂</div>
+      <div class="nav">
+          <a href="/">首页</a>
+          <a href="/bank">题库</a>
+          <a href="/wrongbook">错题本</a>
+          <a href="/stats">学习报告</a>
+      </div>
+      <div id="welcome"></div>
+    </div>
+
+    <div class="panel">
+        <span id="wrong-summary">加载中...</span>
+        &nbsp;&nbsp;
+        <select id="filter-mastered" onchange="loadWrongbook()">
+            <option value="">全部</option>
+            <option value="false">仅待复习</option>
+            <option value="true">仅已掌握</option>
+        </select>
+    </div>
+
+    <div id="wrong-list" style="width:1200px;margin:10px auto;"></div>
+
+    <script>
+        const TYPE_NAMES = {choice: "选择题", blank: "填空题", qa: "简答题"};
+
+        function loadWrongbook() {
+            const token = localStorage.getItem("token");
+            const mastered = document.getElementById("filter-mastered").value;
+            const url = `/api/wrongbook/list/${token}` + (mastered ? `?mastered=${mastered}` : "");
+            fetch(url)
+                .then(r => r.json())
+                .then(data => {
+                    document.getElementById("wrong-summary").textContent =
+                        `待复习 ${data.pending_review} 题 / 已掌握 ${data.mastered_count} 题`;
+                    const list = document.getElementById("wrong-list");
+                    if (!data.items.length) {
+                        list.innerHTML = "<p>暂无错题，继续保持！</p>";
+                        return;
+                    }
+                    list.innerHTML = data.items.map(item => {
+                        const redoLink = item.videoid
+                            ? `<a href="/exam/${item.videoid}?mode=redo">去重练</a> `
+                            : "";
+                        return `<div class="wrong-card">
+                            <div><b>[${TYPE_NAMES[item.type] || item.type}]</b> ${item.question}</div>
+                            <div>知识点：${item.knowledge_point} ｜ 错 ${item.wrong_count} 次 ｜
+                                来源：${item.videotitle || "公共题库"} ｜
+                                状态：${item.mastered ? "已掌握" : "待复习"}</div>
+                            <div>我的答案：${item.last_answer || "（空）"}</div>
+                            <div>标准答案：${item.standard_answer}</div>
+                            <div class="wrong-analysis" id="analysis-${item.examid}">
+                                解析：${item.analysis || "解析生成中..."}</div>
+                            <div>
+                                ${redoLink}
+                                <a href="#" onclick="toggleMaster(${item.wrongid}, ${!item.mastered});return false;">
+                                    ${item.mastered ? "取消掌握" : "标记已掌握"}</a>
+                            </div>
+                        </div>`;
+                    }).join("");
+                    // 解析为空的错题，3 秒后轮询一次
+                    data.items.filter(item => !item.analysis).forEach(item => {
+                        setTimeout(() => pollAnalysis(item.examid), 3000);
+                    });
+                });
+        }
+
+        function pollAnalysis(examid) {
+            const token = localStorage.getItem("token");
+            fetch(`/api/wrongbook/analysis/${examid}/${token}`)
+                .then(r => r.json())
+                .then(data => {
+                    const box = document.getElementById(`analysis-${examid}`);
+                    if (!box) return;
+                    if (data.analysis) box.textContent = "解析：" + data.analysis;
+                    else setTimeout(() => pollAnalysis(examid), 3000);
+                });
+        }
+
+        function toggleMaster(wrongid, mastered) {
+            const token = localStorage.getItem("token");
+            fetch(`/api/wrongbook/master/${wrongid}/${token}`, {
+                method: "POST",
+                headers: {"Content-Type": "application/json"},
+                body: JSON.stringify({mastered: mastered})
+            }).then(() => loadWrongbook());
+        }
+    </script>
+</body>
+</html>

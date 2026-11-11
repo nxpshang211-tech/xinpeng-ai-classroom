@@ -455,30 +455,46 @@ def write_xmind_file(xmind_json: dict[str, Any], filename: str) -> Path:
 
 def _validate_exam(data: dict[str, Any]) -> None:
     choices = data.get("choices")
+    blanks = data.get("blanks")
     qas = data.get("qas")
-    if not isinstance(choices, list) or len(choices) != 8:
-        raise ValueError("必须生成 8 道选择题")
-    if not isinstance(qas, list) or len(qas) != 3:
-        raise ValueError("必须生成 3 道简答题")
+    if not isinstance(choices, list) or len(choices) != 6:
+        raise ValueError("必须生成 6 道选择题")
+    if not isinstance(blanks, list) or len(blanks) != 3:
+        raise ValueError("必须生成 3 道填空题")
+    if not isinstance(qas, list) or len(qas) != 2:
+        raise ValueError("必须生成 2 道简答题")
     for item in choices:
-        if not all(key in item for key in ("question", "options", "answer")):
+        if not all(key in item for key in ("question", "options", "answer", "knowledge_point")):
             raise ValueError("选择题字段不完整")
         if set(item["options"].keys()) != {"A", "B", "C", "D"}:
             raise ValueError("每道选择题必须包含 A/B/C/D 四个选项")
         if item["answer"] not in item["options"]:
             raise ValueError("选择题答案必须是 A/B/C/D")
+        if not item.get("knowledge_point"):
+            raise ValueError("选择题必须标注知识点")
+    for item in blanks:
+        if not item.get("question") or not item.get("answer"):
+            raise ValueError("填空题字段不完整")
+        if not item.get("knowledge_point"):
+            raise ValueError("填空题必须标注知识点")
+        if "alt_answers" in item and not isinstance(item["alt_answers"], list):
+            raise ValueError("填空题备选答案必须是数组")
     for item in qas:
         if not item.get("question") or not item.get("answer"):
             raise ValueError("简答题字段不完整")
+        if not item.get("knowledge_point"):
+            raise ValueError("简答题必须标注知识点")
 
 
 def gen_exam(text: str) -> str:
     prompt = f"""
-根据课堂文本生成 8 道单选题和 3 道简答题，覆盖核心知识点，难度适中。
+根据课堂文本生成 6 道单选题、3 道填空题和 2 道简答题，覆盖核心知识点，难度适中。
+每道题必须标注考察的知识点（knowledge_point，2-8 个字）并给出简短解析（analysis，100 字内）。
 只返回合法 JSON：
 {{
-  "choices": [{{"question": "题目", "options": {{"A": "", "B": "", "C": "", "D": ""}}, "answer": "A"}}],
-  "qas": [{{"question": "题目", "answer": "参考答案"}}]
+  "choices": [{{"question": "题目", "options": {{"A": "", "B": "", "C": "", "D": ""}}, "answer": "A", "knowledge_point": "知识点", "analysis": "解析"}}],
+  "blanks": [{{"question": "题目（用____表示填空处）", "answer": "标准答案", "alt_answers": ["其他可接受答案"], "knowledge_point": "知识点", "analysis": "解析"}}],
+  "qas": [{{"question": "题目", "answer": "参考答案", "knowledge_point": "知识点", "analysis": "解析"}}]
 }}
 课堂文本如下：
 {text}
@@ -506,6 +522,23 @@ def insert_exam(examtext: str, videoid: int) -> None:
                     type="choice",
                     score=5,
                     options=json.dumps(choice["options"], ensure_ascii=False),
+                    knowledge_point=choice["knowledge_point"],
+                    analysis=choice.get("analysis"),
+                )
+            )
+        for blank in exam_json["blanks"]:
+            alt = blank.get("alt_answers") or []
+            session.add(
+                Exams(
+                    videoid=videoid,
+                    question=blank["question"],
+                    answer=blank["answer"],
+                    type="blank",
+                    score=10,
+                    options=None,
+                    knowledge_point=blank["knowledge_point"],
+                    analysis=blank.get("analysis"),
+                    alt_answers=json.dumps(alt, ensure_ascii=False) if alt else None,
                 )
             )
         for qa in exam_json["qas"]:
@@ -517,6 +550,8 @@ def insert_exam(examtext: str, videoid: int) -> None:
                     type="qa",
                     score=20,
                     options=None,
+                    knowledge_point=qa["knowledge_point"],
+                    analysis=qa.get("analysis"),
                 )
             )
         session.commit()
@@ -581,6 +616,45 @@ def gen_key_frames(filepath: str | Path) -> list[Path]:
         shutil.rmtree(target)
     staging.rename(target)
     return [target / path.name for path in written]
+
+
+def grade_blank(user_answer: str, standard: str, alt_answers: list[str] | None = None) -> bool:
+    """填空题判分：规范化后与标准答案/备选答案精确比对，纯本地即时完成。"""
+
+    def normalize(text: str) -> str:
+        # 全角转半角、去首尾空白、内部连续空白折叠、大小写折叠
+        normalized = "".join(
+            chr(ord(ch) - 0xFEE0) if 0xFF01 <= ord(ch) <= 0xFF5E else ch
+            for ch in str(text)
+        )
+        return " ".join(normalized.split()).lower()
+
+    target = normalize(standard)
+    candidates = [normalize(item) for item in (alt_answers or [])]
+    return normalize(user_answer) in {target, *candidates}
+
+
+def gen_wrong_analysis(exam: Exams, student_answer: str) -> str | None:
+    """为错题生成解析：优先用题目已有缓存，否则 AI 生成并写回 exams.analysis。"""
+    if exam.analysis:
+        return exam.analysis
+    prompt = f"""
+题目（{exam.type}）：{exam.question}
+标准答案：{exam.answer}
+学生的错误答案：{student_answer}
+请用 150 字以内说明学生可能出错的原因，并给出正确解题思路。只输出解析正文。
+""".strip()
+    try:
+        analysis = _call_text_model("你是一名耐心细致的辅导教师。", prompt)
+    except PipelineError:
+        return None
+    with Session(engine) as session:
+        row = session.get(Exams, exam.examid)
+        if row is not None and not row.analysis:
+            row.analysis = analysis
+            session.add(row)
+            session.commit()
+    return analysis
 
 
 def ai_score(user_answer: str, question: str, ai_answer: str) -> int:

@@ -16,11 +16,23 @@ from fastapi.templating import Jinja2Templates
 from sqlmodel import Session, desc, select
 
 from config import settings
-from model import Answers, Exams, Scores, Users, Videos, engine, init_database
+from model import (
+    Answers,
+    Exams,
+    PracticeSessions,
+    Scores,
+    Users,
+    Videos,
+    WrongBook,
+    engine,
+    init_database,
+)
 from module import (
     aes_encrypt,
     ai_score,
     check_token,
+    gen_wrong_analysis,
+    grade_blank,
     process_video,
     retry_incomplete_videos,
 )
@@ -264,7 +276,9 @@ def exam(request: Request, videoid: int):
                 "videoid": item.videoid,
                 "question": item.question,
                 "type": item.type,
+                "score": item.score,
                 "options": json.loads(item.options) if item.options else None,
+                "knowledge_point": item.knowledge_point or "综合",
             }
         )
     return templates.TemplateResponse(
@@ -327,10 +341,27 @@ def get_draft(videoid: int, token: str):
     scores = {row.examid: row.score for row in score_rows}
     return {
         "answers": {row.examid: row.answer for row in drafts},
+        "marked": [row.examid for row in drafts if row.marked],
         "submitted": bool(score_rows),
         "scores": scores,
         "total": sum(scores.values()) if score_rows else None,
     }
+
+
+def _is_correct(exam: Exams, score: int) -> bool:
+    """choice/blank 以得分>0 判对；qa 以得分率>=60% 判对。"""
+    if exam.type == "qa":
+        return score >= exam.score * 0.6
+    return score > 0
+
+
+def _judge_one(exam: Exams, user_answer: str) -> int:
+    if exam.type == "choice":
+        return exam.score if exam.answer == user_answer else 0
+    if exam.type == "blank":
+        alts = json.loads(exam.alt_answers) if exam.alt_answers else []
+        return exam.score if grade_blank(user_answer, exam.answer, alts) else 0
+    return ai_score(user_answer, exam.question, exam.answer)
 
 
 @app.post("/exam/submit/{videoid}/{token}")
@@ -339,20 +370,21 @@ def exam_submit(videoid: int, token: str, answers: dict = Body()):
     if token_data["message"] != "Token-OK":
         return "Token-Fail"
     userid = int(token_data["userid"])
+    mode = str(answers.get("mode", "exam"))
+    duration_seconds = int(answers.get("duration_seconds", 0) or 0)
 
     with Session(engine) as session:
-        already_submitted = session.exec(
+        if mode != "redo" and session.exec(
             select(Scores).where(
                 Scores.userid == userid,
                 Scores.videoid == videoid,
             )
-        ).first()
-        if already_submitted:
+        ).first():
             return "Already-Exam"
         exams = session.exec(select(Exams).where(Exams.videoid == videoid)).all()
 
     by_id = {exam.examid: exam for exam in exams}
-    pending_scores: list[Scores] = []
+    parsed: dict[int, str] = {}  # examid -> user_answer
 
     for encoded in answers.get("choices", []):
         try:
@@ -363,63 +395,573 @@ def exam_submit(videoid: int, token: str, answers: dict = Body()):
         question = by_id.get(examid)
         if question is None or question.type != "choice":
             raise HTTPException(status_code=400, detail=f"选择题不存在：{examid}")
-        pending_scores.append(
-            Scores(
-                userid=userid,
-                videoid=videoid,
-                examid=examid,
-                answer=answer,
-                score=5 if question.answer == answer else 0,
-            )
-        )
+        parsed[examid] = answer
 
     for key, answer in answers.items():
-        if key == "choices":
+        if key in ("choices", "mode", "duration_seconds"):
             continue
         try:
             prefix, examid_text = key.split("-", 1)
             examid = int(examid_text)
         except (ValueError, AttributeError):
-            raise HTTPException(status_code=400, detail="简答题答案格式错误")
+            raise HTTPException(status_code=400, detail="主观题答案格式错误")
         question = by_id.get(examid)
-        if prefix != "qa" or question is None or question.type != "qa":
-            raise HTTPException(status_code=400, detail=f"简答题不存在：{examid}")
-        score = ai_score(str(answer), question.question, question.answer)
-        pending_scores.append(
-            Scores(
-                userid=userid,
-                videoid=videoid,
-                examid=examid,
-                answer=str(answer),
-                score=score,
-            )
+        if prefix not in ("qa", "blank") or question is None or question.type != prefix:
+            raise HTTPException(status_code=400, detail=f"题目不存在：{key}")
+        parsed[examid] = str(answer)
+
+    if mode != "redo":
+        expected_ids = {exam.examid for exam in exams}
+        if expected_ids != set(parsed):
+            raise HTTPException(status_code=400, detail="请完成全部题目后再提交")
+    elif not parsed:
+        raise HTTPException(status_code=400, detail="没有需要重练的题目")
+
+    results = []
+    wrong_items: list[tuple[Exams, str]] = []
+    for examid, user_answer in parsed.items():
+        question = by_id[examid]
+        score = _judge_one(question, user_answer)
+        correct = _is_correct(question, score)
+        results.append(
+            {
+                "examid": examid,
+                "type": question.type,
+                "score": score,
+                "correct": correct,
+                "answer": question.answer,
+                "user_answer": user_answer,
+            }
         )
+        if not correct:
+            wrong_items.append((question, user_answer))
 
-    expected_ids = {exam.examid for exam in exams}
-    submitted_ids = {score.examid for score in pending_scores}
-    if expected_ids != submitted_ids:
-        raise HTTPException(status_code=400, detail="请完成全部题目后再提交")
+    total_score = sum(item["score"] for item in results)
+    correct_count = sum(1 for item in results if item["correct"])
 
-    total_score = sum(item.score for item in pending_scores)
     with Session(engine) as session:
-        session.add_all(pending_scores)
-        # 最终答案同步落定为草稿，便于提交后回显
-        for item in pending_scores:
+        for item in results:
             row = session.exec(
-                select(Answers).where(
-                    Answers.userid == userid, Answers.examid == item.examid
+                select(Scores).where(
+                    Scores.userid == userid,
+                    Scores.videoid == videoid,
+                    Scores.examid == item["examid"],
                 )
             ).first()
             if row is None:
                 session.add(
-                    Answers(userid=userid, examid=item.examid, answer=item.answer)
+                    Scores(
+                        userid=userid,
+                        videoid=videoid,
+                        examid=item["examid"],
+                        answer=item["user_answer"],
+                        score=item["score"],
+                    )
+                )
+            else:  # redo 模式：覆盖旧成绩
+                row.answer = item["user_answer"]
+                row.score = item["score"]
+                session.add(row)
+            # 最终答案同步落定为草稿，便于提交后回显
+            draft = session.exec(
+                select(Answers).where(
+                    Answers.userid == userid, Answers.examid == item["examid"]
+                )
+            ).first()
+            if draft is None:
+                session.add(
+                    Answers(userid=userid, examid=item["examid"], answer=item["user_answer"])
                 )
             else:
-                row.answer = item.answer
+                draft.answer = item["user_answer"]
+                draft.updated_at = datetime.now(timezone.utc)
+                session.add(draft)
+
+        # 错题收录 / 重练答对自动标记掌握
+        for question, user_answer in wrong_items:
+            row = session.exec(
+                select(WrongBook).where(
+                    WrongBook.userid == userid, WrongBook.examid == question.examid
+                )
+            ).first()
+            if row is None:
+                session.add(
+                    WrongBook(
+                        userid=userid,
+                        examid=question.examid,
+                        videoid=videoid,
+                        wrong_count=1,
+                        mastered=False,
+                        last_answer=user_answer,
+                    )
+                )
+            else:
+                row.wrong_count += 1
+                row.mastered = False
+                row.last_answer = user_answer
                 row.updated_at = datetime.now(timezone.utc)
                 session.add(row)
+        if mode == "redo":
+            correct_examids = {item["examid"] for item in results if item["correct"]}
+            for row in session.exec(
+                select(WrongBook).where(
+                    WrongBook.userid == userid, WrongBook.examid.in_(correct_examids)
+                )
+            ).all():
+                row.mastered = True
+                row.updated_at = datetime.now(timezone.utc)
+                session.add(row)
+
+        session.add(
+            PracticeSessions(
+                userid=userid,
+                videoid=videoid,
+                mode=mode,
+                total_questions=len(results),
+                correct_count=correct_count,
+                total_score=total_score,
+                duration_seconds=duration_seconds,
+            )
+        )
         session.commit()
-    return total_score
+
+    # 错题解析异步生成（缓存到 exams.analysis），不阻塞响应
+    for question, user_answer in wrong_items:
+        if not question.analysis:
+            worker.submit(gen_wrong_analysis, question, user_answer)
+
+    return {
+        "message": "ok",
+        "total": total_score,
+        "duration_seconds": duration_seconds,
+        "results": results,
+        "wrong_examids": [question.examid for question, _ in wrong_items],
+        "analysis_pending": any(not question.analysis for question, _ in wrong_items),
+    }
+
+
+# ==================== 题库管理 ====================
+
+VALID_TYPES = ("choice", "blank", "qa")
+DEFAULT_SCORES = {"choice": 5, "blank": 10, "qa": 20}
+
+
+def _auth_userid(token: str):
+    """统一鉴权：失败返回 None，成功返回 userid。"""
+    token_data = check_token(token)
+    if token_data["message"] != "Token-OK":
+        return None
+    return int(token_data["userid"])
+
+
+def _validate_bank_item(data: dict):
+    """校验题库题目字段，返回 (错误信息 or None, 清洗后的字段 dict)。"""
+    qtype = str(data.get("type", ""))
+    if qtype not in VALID_TYPES:
+        return "题型必须是 choice/blank/qa", None
+    question = str(data.get("question", "")).strip()
+    if not question:
+        return "题干不能为空", None
+    answer = str(data.get("answer", "")).strip()
+    if not answer:
+        return "答案不能为空", None
+    knowledge_point = str(data.get("knowledge_point", "")).strip() or "综合"
+
+    options = None
+    alt_answers = None
+    if qtype == "choice":
+        raw_options = data.get("options")
+        if not isinstance(raw_options, dict) or set(raw_options.keys()) != {"A", "B", "C", "D"}:
+            return "选择题必须包含 A/B/C/D 四个选项", None
+        if answer not in ("A", "B", "C", "D"):
+            return "选择题答案必须是 A/B/C/D", None
+        options = json.dumps(raw_options, ensure_ascii=False)
+    if qtype == "blank":
+        raw_alts = data.get("alt_answers") or []
+        if not isinstance(raw_alts, list):
+            return "备选答案必须是数组", None
+        alt_answers = json.dumps([str(a) for a in raw_alts], ensure_ascii=False) or None
+
+    try:
+        score = int(data.get("score") or DEFAULT_SCORES[qtype])
+    except (TypeError, ValueError):
+        return "分值必须是整数", None
+    if score <= 0:
+        return "分值必须大于 0", None
+
+    videoid = data.get("videoid")
+    if videoid in ("", None):
+        videoid = None
+    else:
+        try:
+            videoid = int(videoid)
+        except (TypeError, ValueError):
+            return "videoid 必须是整数", None
+
+    analysis = str(data.get("analysis", "")).strip() or None
+    return None, {
+        "question": question,
+        "type": qtype,
+        "answer": answer,
+        "score": score,
+        "options": options,
+        "alt_answers": alt_answers,
+        "knowledge_point": knowledge_point,
+        "analysis": analysis,
+        "videoid": videoid,
+    }
+
+
+def _exam_to_dict(exam: Exams, videotitle: str | None) -> dict:
+    return {
+        "examid": exam.examid,
+        "videoid": exam.videoid,
+        "videotitle": videotitle,
+        "question": exam.question,
+        "type": exam.type,
+        "score": exam.score,
+        "options": json.loads(exam.options) if exam.options else None,
+        "answer": exam.answer,
+        "knowledge_point": exam.knowledge_point or "综合",
+        "analysis": exam.analysis,
+        "alt_answers": json.loads(exam.alt_answers) if exam.alt_answers else [],
+    }
+
+
+@app.get("/api/bank/list")
+def bank_list(type: str = "", knowledge_point: str = "", keyword: str = ""):
+    with Session(engine) as session:
+        statement = select(Exams)
+        if type:
+            statement = statement.where(Exams.type == type)
+        if knowledge_point:
+            statement = statement.where(Exams.knowledge_point == knowledge_point)
+        if keyword:
+            statement = statement.where(Exams.question.contains(keyword))
+        exams = session.exec(statement.order_by(desc(Exams.examid))).all()
+        video_ids = {exam.videoid for exam in exams if exam.videoid is not None}
+        titles = {
+            video.videoid: video.videotitle
+            for video in session.exec(select(Videos).where(Videos.videoid.in_(video_ids))).all()
+        } if video_ids else {}
+    items = [
+        _exam_to_dict(exam, titles.get(exam.videoid) if exam.videoid else "公共题库")
+        for exam in exams
+    ]
+    return {"items": items, "total": len(items)}
+
+
+@app.get("/api/bank/knowledge-points")
+def bank_knowledge_points():
+    with Session(engine) as session:
+        rows = session.exec(select(Exams.knowledge_point).distinct()).all()
+    return {"items": sorted(point for point in rows if point)}
+
+
+@app.post("/api/bank/add/{token}")
+def bank_add(token: str, data: dict = Body()):
+    if _auth_userid(token) is None:
+        return "Token-Fail"
+    error, fields = _validate_bank_item(data)
+    if error:
+        return {"message": "invalid-field", "detail": error}
+    if fields["videoid"] is not None:
+        with Session(engine) as session:
+            if session.get(Videos, fields["videoid"]) is None:
+                return {"message": "invalid-field", "detail": "所属视频不存在"}
+    with Session(engine) as session:
+        exam = Exams(**fields)
+        session.add(exam)
+        session.commit()
+        session.refresh(exam)
+    return {"message": "ok", "examid": exam.examid}
+
+
+@app.post("/api/bank/update/{examid}/{token}")
+def bank_update(examid: int, token: str, data: dict = Body()):
+    if _auth_userid(token) is None:
+        return "Token-Fail"
+    error, fields = _validate_bank_item(data)
+    if error:
+        return {"message": "invalid-field", "detail": error}
+    with Session(engine) as session:
+        exam = session.get(Exams, examid)
+        if exam is None:
+            raise HTTPException(status_code=404, detail="题目不存在")
+        if fields["videoid"] is not None and session.get(Videos, fields["videoid"]) is None:
+            return {"message": "invalid-field", "detail": "所属视频不存在"}
+        for name, value in fields.items():
+            setattr(exam, name, value)
+        session.add(exam)
+        session.commit()
+    return {"message": "ok"}
+
+
+@app.post("/api/bank/delete/{examid}/{token}")
+def bank_delete(examid: int, token: str):
+    if _auth_userid(token) is None:
+        return "Token-Fail"
+    with Session(engine) as session:
+        exam = session.get(Exams, examid)
+        if exam is None:
+            raise HTTPException(status_code=404, detail="题目不存在")
+        # 级联清理关联行，防外键残留
+        for model in (Answers, Scores, WrongBook):
+            for row in session.exec(select(model).where(model.examid == examid)).all():
+                session.delete(row)
+        session.delete(exam)
+        session.commit()
+    return {"message": "ok"}
+
+
+# ==================== 在线答题：即时判分与标记 ====================
+
+
+@app.post("/api/practice/judge/{token}")
+def practice_judge(token: str, data: dict = Body()):
+    if _auth_userid(token) is None:
+        return "Token-Fail"
+    examid = int(data.get("examid", 0))
+    answer = str(data.get("answer", ""))
+    with Session(engine) as session:
+        exam = session.get(Exams, examid)
+    if exam is None:
+        raise HTTPException(status_code=404, detail="题目不存在")
+    if exam.type == "qa":
+        score = ai_score(answer, exam.question, exam.answer)
+        return {
+            "score": score,
+            "correct": _is_correct(exam, score),
+            "analysis": exam.answer,  # 简答题展示参考答案
+        }
+    score = _judge_one(exam, answer)
+    return {
+        "score": score,
+        "correct": _is_correct(exam, score),
+        "answer": exam.answer,
+        "analysis": exam.analysis or "",
+    }
+
+
+@app.post("/exam/mark/{videoid}/{token}")
+def exam_mark(videoid: int, token: str, data: dict = Body()):
+    userid = _auth_userid(token)
+    if userid is None:
+        return "Token-Fail"
+    examid = int(data.get("examid", 0))
+    marked = bool(data.get("marked", False))
+    with Session(engine) as session:
+        exam = session.get(Exams, examid)
+        if exam is None or exam.videoid != videoid:
+            raise HTTPException(status_code=404, detail="题目不存在")
+        row = session.exec(
+            select(Answers).where(
+                Answers.userid == userid, Answers.examid == examid
+            )
+        ).first()
+        if row is None:
+            session.add(Answers(userid=userid, examid=examid, answer="", marked=marked))
+        else:
+            row.marked = marked
+            row.updated_at = datetime.now(timezone.utc)
+            session.add(row)
+        session.commit()
+    return {"message": "ok"}
+
+
+# ==================== 错题本 ====================
+
+
+def _wrongbook_item(row: WrongBook, exam: Exams, videotitle: str | None) -> dict:
+    item = _exam_to_dict(exam, videotitle)
+    item.update(
+        {
+            "wrongid": row.wrongid,
+            "wrong_count": row.wrong_count,
+            "mastered": row.mastered,
+            "last_answer": row.last_answer,
+            "standard_answer": exam.answer,
+        }
+    )
+    return item
+
+
+@app.get("/api/wrongbook/list/{token}")
+def wrongbook_list(token: str, mastered: str = ""):
+    userid = _auth_userid(token)
+    if userid is None:
+        return "Token-Fail"
+    with Session(engine) as session:
+        statement = select(WrongBook).where(WrongBook.userid == userid)
+        if mastered in ("true", "false"):
+            statement = statement.where(WrongBook.mastered == (mastered == "true"))
+        rows = session.exec(
+            statement.order_by(WrongBook.mastered, desc(WrongBook.updated_at))
+        ).all()
+        exam_map = {
+            exam.examid: exam
+            for exam in session.exec(
+                select(Exams).where(Exams.examid.in_([r.examid for r in rows]))
+            ).all()
+        } if rows else {}
+        video_ids = {row.videoid for row in rows if row.videoid is not None}
+        titles = {
+            video.videoid: video.videotitle
+            for video in session.exec(select(Videos).where(Videos.videoid.in_(video_ids))).all()
+        } if video_ids else {}
+    items = [
+        _wrongbook_item(row, exam_map[row.examid], titles.get(row.videoid))
+        for row in rows
+        if row.examid in exam_map
+    ]
+    return {
+        "items": items,
+        "pending_review": sum(1 for item in items if not item["mastered"]),
+        "mastered_count": sum(1 for item in items if item["mastered"]),
+    }
+
+
+@app.post("/api/wrongbook/master/{wrongid}/{token}")
+def wrongbook_master(wrongid: int, token: str, data: dict = Body()):
+    userid = _auth_userid(token)
+    if userid is None:
+        return "Token-Fail"
+    with Session(engine) as session:
+        row = session.get(WrongBook, wrongid)
+        if row is None or row.userid != userid:
+            raise HTTPException(status_code=404, detail="错题记录不存在")
+        row.mastered = bool(data.get("mastered", False))
+        row.updated_at = datetime.now(timezone.utc)
+        session.add(row)
+        session.commit()
+    return {"message": "ok"}
+
+
+@app.get("/api/wrongbook/analysis/{examid}/{token}")
+def wrongbook_analysis(examid: int, token: str):
+    if _auth_userid(token) is None:
+        return "Token-Fail"
+    with Session(engine) as session:
+        exam = session.get(Exams, examid)
+    if exam is None:
+        raise HTTPException(status_code=404, detail="题目不存在")
+    return {"analysis": exam.analysis}
+
+
+# ==================== 学习数据分析 ====================
+
+
+@app.get("/api/stats/overview/{token}")
+def stats_overview(token: str):
+    userid = _auth_userid(token)
+    if userid is None:
+        return "Token-Fail"
+    with Session(engine) as session:
+        score_rows = session.exec(select(Scores).where(Scores.userid == userid)).all()
+        exam_map = {
+            exam.examid: exam
+            for exam in session.exec(
+                select(Exams).where(Exams.examid.in_([r.examid for r in score_rows]))
+            ).all()
+        } if score_rows else {}
+        sessions = session.exec(
+            select(PracticeSessions)
+            .where(PracticeSessions.userid == userid)
+            .order_by(desc(PracticeSessions.sessionid))
+            .limit(10)
+        ).all()
+        total_duration = sum(
+            s.duration_seconds
+            for s in session.exec(
+                select(PracticeSessions).where(PracticeSessions.userid == userid)
+            ).all()
+        )
+        pending_wrong = len(
+            session.exec(
+                select(WrongBook).where(
+                    WrongBook.userid == userid, WrongBook.mastered == False  # noqa: E712
+                )
+            ).all()
+        )
+        video_ids = {s.videoid for s in sessions if s.videoid is not None}
+        titles = {
+            video.videoid: video.videotitle
+            for video in session.exec(select(Videos).where(Videos.videoid.in_(video_ids))).all()
+        } if video_ids else {}
+
+    def bucket(rows, key_of):
+        groups: dict[str, list[bool]] = {}
+        for row in rows:
+            exam = exam_map.get(row.examid)
+            if exam is None:
+                continue
+            groups.setdefault(key_of(exam), []).append(_is_correct(exam, row.score))
+        return [
+            {
+                "name": name,
+                "total": len(flags),
+                "correct": sum(flags),
+                "accuracy": round(sum(flags) / len(flags), 4) if flags else 0,
+            }
+            for name, flags in sorted(groups.items())
+        ]
+
+    total = len(score_rows)
+    correct_total = sum(
+        1
+        for row in score_rows
+        if row.examid in exam_map and _is_correct(exam_map[row.examid], row.score)
+    )
+    return {
+        "summary": {
+            "total_answers": total,
+            "accuracy": round(correct_total / total, 4) if total else 0,
+            "total_duration_seconds": total_duration,
+            "pending_wrong": pending_wrong,
+        },
+        "by_knowledge_point": [
+            {"knowledge_point": b["name"], "total": b["total"],
+             "correct": b["correct"], "accuracy": b["accuracy"]}
+            for b in bucket(score_rows, lambda e: e.knowledge_point or "综合")
+        ],
+        "by_type": [
+            {"type": b["name"], "total": b["total"],
+             "correct": b["correct"], "accuracy": b["accuracy"]}
+            for b in bucket(score_rows, lambda e: e.type)
+        ],
+        "recent_sessions": [
+            {
+                "sessionid": s.sessionid,
+                "videoid": s.videoid,
+                "videotitle": titles.get(s.videoid),
+                "mode": s.mode,
+                "total_questions": s.total_questions,
+                "correct_count": s.correct_count,
+                "total_score": s.total_score,
+                "duration_seconds": s.duration_seconds,
+                "createtime": s.createtime.isoformat(),
+            }
+            for s in sessions
+        ],
+    }
+
+
+# ==================== 页面路由 ====================
+
+
+@app.get("/bank")
+def bank_page(request: Request):
+    return templates.TemplateResponse(request=request, name="bank.html")
+
+
+@app.get("/wrongbook")
+def wrongbook_page(request: Request):
+    return templates.TemplateResponse(request=request, name="wrongbook.html")
+
+
+@app.get("/stats")
+def stats_page(request: Request):
+    return templates.TemplateResponse(request=request, name="stats.html")
 
 
 if __name__ == "__main__":

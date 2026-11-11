@@ -171,6 +171,92 @@ td {
     margin: 20px 0;
 }
 
+/*做题系统扩展样式（粗略版，后续重构美化）*/
+.menu .nav {
+    float: left;
+    line-height: 80px;
+    margin-left: 30px;
+}
+.menu .nav a {
+    margin-right: 18px;
+    color: #337ab7;
+    text-decoration: none;
+}
+.panel {
+    width: 1200px;
+    margin: 10px auto;
+    padding: 12px 16px;
+    border: solid 1px lightskyblue;
+    border-radius: 8px;
+    box-sizing: border-box;
+}
+.kp-tag {
+    font-size: 12px;
+    color: darkgreen;
+    border: solid 1px darkgreen;
+    border-radius: 4px;
+    padding: 1px 6px;
+    margin-left: 8px;
+}
+.mark-tag {
+    font-size: 12px;
+    color: #b42318;
+    margin-left: 12px;
+}
+.blank-box {
+    width: 1100px;
+    min-height: 80px;
+    margin: 30px auto;
+    border-bottom: solid 1px lightskyblue;
+}
+.blank-box .question {
+    text-align: left;
+    width: 95%;
+    min-height: 40px;
+    margin: 10px auto;
+    border-bottom: dotted 1px darkgrey;
+}
+.blank-box .answer {
+    width: 95%;
+    margin: 10px auto;
+    text-align: left;
+}
+.blank-input {
+    width: 60%;
+    height: 32px;
+    padding: 0 8px;
+    border: solid 1px darkgrey;
+    border-radius: 4px;
+}
+.judge-line {
+    width: 95%;
+    margin: 6px auto;
+    text-align: left;
+}
+.judge-line button {
+    height: 28px;
+    padding: 0 12px;
+    background-color: #337ab7;
+    color: whitesmoke;
+    border: 0;
+    border-radius: 4px;
+    cursor: pointer;
+}
+.judge-result {
+    margin-left: 12px;
+    font-size: 14px;
+    color: #333;
+}
+.wrong-card {
+    border: solid 1px lightskyblue;
+    border-radius: 8px;
+    padding: 12px 16px;
+    margin-bottom: 12px;
+    line-height: 1.9;
+}
+.wrong-analysis {
+    color: darkgreen;
+}
 /*登录/注册页样式*/
 .auth-card {
     width: 400px;

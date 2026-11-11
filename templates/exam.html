@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>在线考试</title>
+    <title>在线练习</title>
     <link rel="stylesheet" href="/static/style.css">
     <script src="/static/script.js"></script>
     <script>
@@ -15,6 +15,12 @@
 <body>
     <div class="menu">
       <div class="logo">欣鹏AI智慧课堂</div>
+      <div class="nav">
+          <a href="/">首页</a>
+          <a href="/bank">题库</a>
+          <a href="/wrongbook">错题本</a>
+          <a href="/stats">学习报告</a>
+      </div>
       <div id="welcome"></div>
     </div>
 
@@ -30,8 +36,13 @@
         {% for exam in exams %}
         <!--如果是单选题，则需要使用radio显示一个单选按钮用于作答-->
         {% if exam.type == 'choice' %}
-        <div class="choice-box">
-            <div class="question">第{{loop.index}}题：{{exam.question}}</div>
+        <div class="choice-box" id="q-{{exam.examid}}">
+            <div class="question">
+                第{{loop.index}}题：{{exam.question}}
+                <span class="kp-tag">{{exam.knowledge_point}}</span>
+                <label class="mark-tag"><input type="checkbox" id="mark-{{exam.examid}}"
+                    onchange="toggleMark('{{videoid}}', {{exam.examid}}, this.checked)">标记</label>
+            </div>
             <div class="options">
                 {% for k, v in exam.options.items() %}
                     <!--单选按钮中一组按钮的name属性必须保持一致，才能正常单选-->
@@ -40,14 +51,44 @@
                     {{k}}：{{v}} &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
                 {% endfor %}
             </div>
+            <div class="judge-line">
+                <button type="button" onclick="judgeOne('{{videoid}}', {{exam.examid}}, 'choice')">立即判分</button>
+                <span class="judge-result" id="judge-{{exam.examid}}"></span>
+            </div>
+        </div>
+        <!--填空题：单行输入框-->
+        {% elif exam.type == 'blank' %}
+        <div class="blank-box" id="q-{{exam.examid}}">
+            <div class="question">
+                第{{loop.index}}题：{{exam.question}}
+                <span class="kp-tag">{{exam.knowledge_point}}</span>
+                <label class="mark-tag"><input type="checkbox" id="mark-{{exam.examid}}"
+                    onchange="toggleMark('{{videoid}}', {{exam.examid}}, this.checked)">标记</label>
+            </div>
+            <div class="answer">
+                <input type="text" class="blank-input" id="blank-{{exam.examid}}" placeholder="请输入答案">
+            </div>
+            <div class="judge-line">
+                <button type="button" onclick="judgeOne('{{videoid}}', {{exam.examid}}, 'blank')">立即判分</button>
+                <span class="judge-result" id="judge-{{exam.examid}}"></span>
+            </div>
         </div>
         <!--如果是简答题，则显示题目和一个textarea用于作答-->
         {% elif exam.type == 'qa' %}
-         <div class="qa-box">
-            <div class="question">第{{loop.index}}题：{{exam.question}}</div>
+         <div class="qa-box" id="q-{{exam.examid}}">
+            <div class="question">
+                第{{loop.index}}题：{{exam.question}}
+                <span class="kp-tag">{{exam.knowledge_point}}</span>
+                <label class="mark-tag"><input type="checkbox" id="mark-{{exam.examid}}"
+                    onchange="toggleMark('{{videoid}}', {{exam.examid}}, this.checked)">标记</label>
+            </div>
             <div class="answer">
                 <!--以qa-10这种格式作为ID，可以解析出题目的编号，以对应数据表的ID-->
                 <textarea class="answer-input" id="qa-{{exam.examid}}"></textarea>
+            </div>
+            <div class="judge-line">
+                <button type="button" onclick="judgeOne('{{videoid}}', {{exam.examid}}, 'qa')">立即判分</button>
+                <span class="judge-result" id="judge-{{exam.examid}}"></span>
             </div>
         </div>
         {% endif %}

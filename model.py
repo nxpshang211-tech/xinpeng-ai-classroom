@@ -47,6 +47,9 @@ class Exams(SQLModel, table=True):
     answer: str
     score: int
     options: Optional[str] = None
+    knowledge_point: Optional[str] = Field(default=None, index=True)
+    analysis: Optional[str] = None
+    alt_answers: Optional[str] = None  # 填空题备选答案，JSON 数组字符串
     createtime: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -75,8 +78,41 @@ class Answers(SQLModel, table=True):
     userid: Optional[int] = Field(default=None, foreign_key="users.userid", index=True)
     examid: Optional[int] = Field(default=None, foreign_key="exams.examid", index=True)
     answer: str
+    marked: bool = Field(default=False)  # 题目标记（疑难题复查）
     createtime: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class WrongBook(SQLModel, table=True):
+    """错题本：交卷后自动收录答错的题目。"""
+
+    __table_args__ = (
+        UniqueConstraint("userid", "examid", name="uq_wrong_item"),
+    )
+
+    wrongid: Optional[int] = Field(default=None, primary_key=True)
+    userid: Optional[int] = Field(default=None, foreign_key="users.userid", index=True)
+    examid: Optional[int] = Field(default=None, foreign_key="exams.examid", index=True)
+    videoid: Optional[int] = Field(default=None, index=True)
+    wrong_count: int = Field(default=1)
+    mastered: bool = Field(default=False)
+    last_answer: str = ""
+    createtime: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class PracticeSessions(SQLModel, table=True):
+    """练习/考试会话：每次交卷产生一条，用于成绩与用时统计。"""
+
+    sessionid: Optional[int] = Field(default=None, primary_key=True)
+    userid: Optional[int] = Field(default=None, foreign_key="users.userid", index=True)
+    videoid: Optional[int] = Field(default=None, index=True)
+    mode: str = Field(default="exam")  # exam=正常练习 / redo=错题重练
+    total_questions: int
+    correct_count: int  # 客观题答对数
+    total_score: int
+    duration_seconds: int = Field(default=0)
+    createtime: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 engine = create_engine(
@@ -92,5 +128,40 @@ def _enable_sqlite_foreign_keys(dbapi_connection, _connection_record):
     cursor.close()
 
 
+def _table_columns(table: str) -> set[str]:
+    with engine.connect() as connection:
+        rows = connection.exec_driver_sql(f"PRAGMA table_info({table})").fetchall()
+    return {row[1] for row in rows}
+
+
+def _migrate() -> None:
+    """对老库做平滑迁移：缺列则 ADD COLUMN，幂等可重复执行。"""
+    with engine.begin() as connection:
+        exam_columns = _table_columns("exams")
+        if "knowledge_point" not in exam_columns:
+            connection.exec_driver_sql("ALTER TABLE exams ADD COLUMN knowledge_point TEXT")
+        if "analysis" not in exam_columns:
+            connection.exec_driver_sql("ALTER TABLE exams ADD COLUMN analysis TEXT")
+        if "alt_answers" not in exam_columns:
+            connection.exec_driver_sql("ALTER TABLE exams ADD COLUMN alt_answers TEXT")
+
+        answer_columns = _table_columns("answers")
+        if "marked" not in answer_columns:
+            connection.exec_driver_sql(
+                "ALTER TABLE answers ADD COLUMN marked BOOLEAN DEFAULT 0"
+            )
+
+        # 回填老题目的知识点：优先取所属视频关键词，兜底为「综合」
+        connection.exec_driver_sql(
+            "UPDATE exams SET knowledge_point = "
+            "(SELECT keyword FROM videos WHERE videos.videoid = exams.videoid) "
+            "WHERE knowledge_point IS NULL"
+        )
+        connection.exec_driver_sql(
+            "UPDATE exams SET knowledge_point = '综合' WHERE knowledge_point IS NULL"
+        )
+
+
 def init_database() -> None:
     SQLModel.metadata.create_all(engine)
+    _migrate()
