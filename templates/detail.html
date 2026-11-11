@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>课程详情</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <script src="/static/script.js"></script>
+    <!-- 引入jsmind的样式和源文件 -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/jsmind@0.8.7/style/jsmind.css">
+    <script src="https://cdn.jsdelivr.net/npm/jsmind@0.8.7/es6/jsmind.js"></script>
+    <!-- 引入mathjax库用于渲染数学公式 -->
+    <script async src="https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/tex-mml-chtml.js"></script>
+
+    <script>
+        // 当文档加载完成后，对登录信息进行判断，并开始渲染Xmind
+        document.addEventListener("DOMContentLoaded", function () {
+            if (localStorage.getItem("token") != null) {
+                welcome = document.getElementById("welcome");
+                welcome.innerHTML = "你好，" + localStorage.getItem("realname");
+                welcome.innerHTML += "&nbsp;&nbsp;<a href='#' onclick='doLogout()'>退出</a>";
+            }
+
+            const data = {{ xmind_data|tojson }};
+            drawMindMap(data);
+        });
+
+    </script>
+</head>
+<body>
+    <div class="menu">
+      <div class="logo">欣鹏AI智慧课堂</div>
+      <div class="login">
+          用户名：<input type="text" id="username">
+          密码：<input type="password" id="password">
+          &nbsp;&nbsp;<button onclick="doLogin()">登录</button>
+      </div>
+      <div id="welcome">
+          <a href="#" onclick="clickLogin()">点击登录</a>
+      </div>
+    </div>
+
+    <!-- 定义video元素用于对当前视频进行播放，可选功能 -->
+    <div class="play">
+        <video src="/static/videos/{{video.filename}}" controls width="1200" height="675"/>
+    </div>
+
+    <div class="summary">
+        {{video.summary|safe}}
+    </div>
+
+    <div id="jsmind_container"></div>
+
+    <div class="key-frames">
+        {% for keyframe in keyframes %}
+        <!-- 为每张图添加一个超链接，点击时可以查看大图 -->
+        <a href="/static/frames/{{video.filename}}/{{keyframe}}">
+            <img src="/static/frames/{{video.filename}}/{{keyframe}}" width="397"/>
+        </a>
+        {% endfor %}
+    </div>
+
+    <div class="reference">
+        <!--遍历所有拓展知识，并将标题和超链接进行展示 -->
+        {% for reference in references %}
+        <a href="{{reference.link}}" target="_blank">{{reference.title}}</a><br/>
+        {% endfor %}
+        <br/>
+
+        <!-- 一并增加思维导图下载和进入考题页面的超链接 -->
+        <a href="/static/xminds/{{video.filename.split('.')[0]}}.xmind">
+            下载XMind文件</a>
+        <a href="/exam/{{video.videoid}}">查看课程考题</a>
+    </div>
+</body>
+</html>

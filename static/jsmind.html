@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>矩阵乘法思维导图</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background-color: white;
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            text-align: center;
+            color: #333;
+        }
+        #jsmind_container {
+            width: 100%;
+            height: 600px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            background-color: #f9f9f9;
+        }
+    </style>
+    <!-- 引入jsMind库 -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/jsmind@0.4.6/style/jsmind.css">
+    <script src="https://cdn.jsdelivr.net/npm/jsmind@0.4.6/js/jsmind.js"></script>
+<!--    <script src="https://cdn.jsdelivr.net/npm/jsmind@0.4.6/js/jsmind.draggable.js"></script>-->
+
+    <script>
+        // 定义JSON数据
+        const data = {
+            "矩阵乘法": {
+                "定义": "针对两个矩阵（二维数组）的乘法",
+                "要求": [
+                    "前一个矩阵的列数必须等于后一个矩阵的行数",
+                    "M行N列的矩阵只能和N行P列的矩阵相乘",
+                    "结果矩阵的形状为M行P列"
+                ],
+                "算法": [
+                    "A11乘以B11加上A12乘以B21",
+                    "逐行逐列进行乘法和加法运算"
+                ],
+                "示例": {
+                    "矩阵A": "三行两列",
+                    "矩阵B": "两行一列",
+                    "结果矩阵": "三行一列"
+                },
+                "作业要求": {
+                    "使用原生Python代码": "对两个二维列表进行矩阵乘法运算",
+                    "不能使用第三方库": "包括NumPy",
+                    "封装函数": "metrics(list1, list2)",
+                    "返回结果": "矩阵乘法的结果"
+                }
+            }
+        };
+
+        // 将JSON数据转换为jsMind需要的格式
+        function convertToJsMindFormat(data) {
+            const mind = {
+                "meta": {
+                    "name": "矩阵乘法思维导图",
+                    "author": "AI生成",
+                    "version": "1.0"
+                },
+                "format": "node_tree",
+                "data": {
+                    "id": "root",
+                    "topic": Object.keys(data)[0],
+                    "children": []
+                }
+            };
+
+            // 递归构建思维导图节点
+            function buildNodes(node, parentNode) {
+                if (typeof node === 'string') {
+                    return {
+                        "id": `node_${Math.random().toString(36).substr(2, 9)}`,
+                        "topic": node,
+                        "direction": "right"
+                    };
+                } else if (Array.isArray(node)) {
+                    return node.map(item => buildNodes(item, parentNode));
+                } else if (typeof node === 'object' && node !== null) {
+                    return Object.keys(node).map(key => {
+                        const childNode = {
+                            "id": `node_${Math.random().toString(36).substr(2, 9)}`,
+                            "topic": key,
+                            "direction": "right"
+                        };
+
+                        const grandChildren = buildNodes(node[key], childNode);
+                        if (Array.isArray(grandChildren)) {
+                            childNode.children = grandChildren;
+                        } else if (grandChildren) {
+                            childNode.children = [grandChildren];
+                        }
+
+                        return childNode;
+                    });
+                }
+                return null;
+            }
+
+            const rootData = data[Object.keys(data)[0]];
+            mind.data.children = Object.keys(rootData).map(key => {
+                const childNode = {
+                    "id": `node_${Math.random().toString(36).substr(2, 9)}`,
+                    "topic": key,
+                    "direction": "right"
+                };
+
+                const grandChildren = buildNodes(rootData[key], childNode);
+                if (Array.isArray(grandChildren)) {
+                    childNode.children = grandChildren;
+                } else if (grandChildren) {
+                    childNode.children = [grandChildren];
+                }
+
+                return childNode;
+            });
+
+            return mind;
+        }
+
+        // 初始化思维导图
+        function initMindMap() {
+            const options = {
+                container: 'jsmind_container',
+                theme: 'primary',
+                editable: false,
+                mode: 'full',
+                support_html: true,
+                view: {
+                    hmargin: 100,
+                    vmargin: 50,
+                    line_width: 2,
+                    line_color: '#555'
+                }
+            };
+
+            // 将JSON数据转换为jsMind格式
+            const mind = convertToJsMindFormat(data);
+
+            // 创建jsMind实例
+            const jm = new jsMind(options);
+            jm.show(mind);
+
+            // 自动调整视图
+            setTimeout(() => {
+                jm.expand_all();
+                jm.set_center('root');
+            }, 500);
+        }
+
+        // 页面加载完成后初始化思维导图
+        document.addEventListener('DOMContentLoaded', initMindMap);
+    </script>
+</head>
+<body>
+    <div class="container">
+        <h1>矩阵乘法思维导图</h1>
+        <div id="jsmind_container"></div>
+    </div>
+
+
+</body>
+</html>

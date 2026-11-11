@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>AI智慧课堂-首页</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <script src="/static/script.js"></script>
+
+    <script>
+        // 每次加载页面时，都向服务器请求确认Token是否有效，如果无效或过期则显示未登录状态
+        document.addEventListener("DOMContentLoaded", function () {
+            // 先判断localStorage中存在Token，再发送请求给后端确认Token可用
+            if (localStorage.getItem("token") != null) {
+                fetch("/checklogin", {
+                    method: 'POST',
+                    headers: {"Content-Type": "application/json"},
+                    body: JSON.stringify({"token": localStorage.getItem("token")})
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data["message"] === "Token-OK") {
+                        welcome = document.getElementById("welcome");
+                        welcome.innerHTML = "你好，" + data["realname"];
+                        welcome.innerHTML += "&nbsp;&nbsp;" +
+                            "<a href='#' onclick='doLogout()'>退出</a>";
+                    }
+                });
+            }
+            // 以上情况都不满足时，则页面中默认显示未登录状态
+        });
+    </script>
+</head>
+<body>
+  <div class="menu">
+      <div class="logo">欣鹏AI智慧课堂</div>
+      <!-- 用户登录框默认不显示，点击登录时才显示 -->
+      <div class="login">
+          用户名：<input type="text" id="username">
+          密码：<input type="password" id="password">
+          &nbsp;&nbsp;<button onclick="doLogin()">登录</button>
+      </div>
+      <div id="welcome">
+          <a href="#" onclick="clickLogin()">点击登录</a>
+      </div>
+  </div>
+
+  <div class="upload">
+      <div>
+          选择视频：<input type="file" id="file" onchange="fillTitle()"/>
+      </div>
+      <div>
+          视频标题：<input type="title" id="title"/>
+      </div>
+      <div>
+          所属课程：<select id="course" style="width: 100px">
+          <option value="机器学习">机器学习</option>
+          <option value="计算机视觉">计算机视觉</option>
+          <option value="神经网络">神经网络</option>
+          <option value="自然语言处理">自然语言处理</option>
+          <option value="文本生成">文本生成</option>
+          <option value="大模型原理">大模型原理</option>
+          <option value="智能体开发">智能体开发</option>
+        </select>
+      </div>
+      <div>
+          <button onclick="doUpload(this)">上传视频</button>
+      </div>
+      <div id="upload-status" class="processing-status"></div>
+  </div>
+
+  <table>
+      <thead>
+      <tr>
+          <td>视频编号</td>
+          <td>视频标题</td>
+          <td>视频时长</td>
+          <td>关键字</td>
+          <td>处理状态</td>
+          <td>上传时间</td>
+          <td>相关操作</td>
+      </tr>
+      </thead>
+      <tbody>
+      {% for result in results %}
+      <tr>
+        <td>{{result.videoid}}</td>
+        <td>{{result.videotitle}}</td>
+        <td>{% if result.duration %}{{(result.duration/60)|round(1)}}分钟{% else %}处理中{% endif %}</td>
+        <td>{{result.keyword or '-'}}</td>
+        <td id="status-{{result.videoid}}"
+            data-video-status="{{result.status}}"
+            data-video-id="{{result.videoid}}">
+            {{result.status}}（{{result.progress}}%）
+            {% if result.error_message %}<br>{{result.error_message}}{% endif %}
+        </td>
+        <td>{{result.createtime}}</td>
+          <td>
+              {% if result.status == 'completed' %}
+              <a href="/detail/{{result.videoid}}">查看详情</a>
+              <a href="/exam/{{result.videoid}}">查看考题</a>
+              {% elif result.status == 'failed' %}
+              <button onclick="retryVideo('{{result.videoid}}')">重试</button>
+              {% else %}
+              <a href="/detail/{{result.videoid}}">查看进度</a>
+              {% endif %}
+          </td>
+      </tr>
+      {% endfor %}
+      </tbody>
+  </table>
+
+  <script>
+      document.addEventListener("DOMContentLoaded", startPendingVideoPolling);
+  </script>
+
+</body>
+</html>

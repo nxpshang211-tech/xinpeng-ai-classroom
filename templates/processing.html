@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>视频处理进度</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <script src="/static/script.js"></script>
+</head>
+<body>
+    <div class="menu">
+        <div class="logo">欣鹏AI智慧课堂</div>
+        <div><a href="/">返回首页</a></div>
+    </div>
+    <div class="processing-card">
+        <h2>{{video.videotitle}}</h2>
+        <p>视频已上传，AI 正在后台自动处理。</p>
+        <div id="status-{{video.videoid}}"
+             data-video-status="{{video.status}}"
+             data-video-id="{{video.videoid}}">
+            {{video.status}}（{{video.progress}}%）
+        </div>
+        <progress id="progress-{{video.videoid}}" value="{{video.progress}}" max="100"></progress>
+        <p id="message-{{video.videoid}}">{{video.error_message or video.warning_message or ''}}</p>
+    </div>
+    <script>
+        document.addEventListener("DOMContentLoaded", startPendingVideoPolling);
+    </script>
+</body>
+</html>

@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WoniuAI智能问答</title>
+    <style>
+        #chatbox {
+            width: 800px;
+            height: 580px;
+            border: solid 1px gainsboro;
+            margin: auto;
+            overflow-y: scroll;
+        }
+        #bottom {
+            width: 800px;
+            height: 120px;
+            border: solid 1px gainsboro;
+            margin: auto;
+            margin-top: 15px;
+        }
+        #question {
+            width: 560px;
+            height: 96px;
+            border: solid 1px darkgrey;
+            margin: 9px;
+            border-radius: 5px;
+        }
+        #qa-button {
+            width: 90px;
+            height: 35px;
+            background-color: rgb(38, 167, 124);
+            border: 0;
+            border-radius: 5px;
+            margin-top: 20px;
+            margin-right: 30px;
+            margin-bottom: 20px;
+        }
+        #welcome {
+            width: 70%;
+            border: solid 0px blue;
+            margin: 10px;
+            min-height: 30px;
+            padding: 10px;
+            float: left;
+            border-radius: 15px;
+        }
+        .ask-box {
+            width: 65%;
+            border: solid 0px green;
+            margin: 10px;
+            min-height: 30px;
+            padding: 10px;
+            float: right;
+            border-radius: 15px;
+            background-color: lightseagreen;
+        }
+        .answer-box {
+            width: 70%;
+            border: solid 0px blue;
+            margin: 10px;
+            min-height: 30px;
+            padding: 10px;
+            float: left;
+            border-radius: 15px;
+            background-color: #e5e5ea;
+        }
+
+
+        .answer-box h1, .answer-box h2, .answer-box h3, .answer-box h4, .answer-box h5, .answer-box h6 {
+            margin-top: 24px;
+            margin-bottom: 16px;
+            font-weight: 600;
+            line-height: 1.25;
+        }
+
+        .answer-box h1 {
+            border-bottom: 1px solid #eaecef;
+            padding-bottom: 0.3em;
+        }
+
+        .answer-box blockquote {
+            padding: 0 1em;
+            color: #6a737d;
+            border-left: 0.25em solid #dfe2e5;
+            margin: 0;
+        }
+
+        .answer-box pre {
+            background-color: #f6f8fa;
+            border-radius: 3px;
+            padding: 16px;
+            overflow: auto;
+        }
+
+        .answer-box code {
+            background-color: rgba(27, 31, 35, 0.05);
+            border-radius: 3px;
+            font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+            font-size: 85%;
+            padding: 0.2em 0.4em;
+        }
+
+        .answer-box pre code {
+            background-color: transparent;
+            padding: 0;
+        }
+
+        .answer-box img {
+            max-width: 100%;
+        }
+
+        .answer-box table {
+            border-collapse: collapse;
+            width: 100%;
+            margin-bottom: 16px;
+        }
+
+        .answer-box table th, .answer-box table td {
+            border: 1px solid #dfe2e5;
+            padding: 6px 13px;
+        }
+
+        .answer-box table tr {
+            background-color: #fff;
+            border-top: 1px solid #c6cbd1;
+        }
+
+        .answer-box table tr:nth-child(2n) {
+            background-color: #f6f8fa;
+        }
+    </style>
+
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.7.0/styles/github.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/markdown-it@14.1.0/dist/markdown-it.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/styles/default.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/highlight.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/tex-mml-chtml.js"></script>
+    <script async src="https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/tex-mml-chtml.js"></script>
+
+    <script>
+        const md = window.markdownit({
+            html: true,         // 启用HTML标签
+            linkify: true,      // 自动转换URL为链接
+            typographer: true,  // 启用一些语言中立的替换 + 引号美化
+            highlight: function (str, lang) {
+                // 这里可以集成代码高亮插件
+                // return `<pre class="language-${lang}"><code>${str}</code></pre>`;
+                if (lang && hljs.getLanguage(lang)) {
+                    try {
+                        return '<pre class="hljs"><code>' +
+                               hljs.highlight(str, { language: lang, ignoreIllegals: true }).value +
+                               '</code></pre>';
+                    } catch (__) {}
+                }
+
+                // 默认使用默认样式
+                return '<pre class="hljs"><code>' + md.utils.escapeHtml(str) + '</code></pre>';
+            }
+        });
+
+
+        window.MathJax = {
+            tex: {
+                inlineMath: [['$', '$'], ['\\(', '\\)']],
+                displayMath: [['$$', '$$'], ['\\[', '\\]']],
+                processEscapes: true
+            },
+            options: {
+                skipHtmlTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code'],
+                ignoreHtmlClass: 'tex2jax_ignore',
+            }
+        };
+
+
+        function doAsk() {
+            let ask = document.createElement('div');
+            ask.setAttribute("class", "ask-box");
+            ask.innerHTML = document.getElementById("question").value;
+            document.getElementById("chatbox").append(ask);
+            doAnswer();
+        }
+
+        function doAnswer() {
+            let answer = document.createElement('div');
+            answer.setAttribute("class", "answer-box");
+            document.getElementById("chatbox").append(answer);
+
+            let currentText = "";
+
+            function renderMarkdown(text) {
+                const renderedHtml = md.render(text);
+                answer.innerHTML = renderedHtml;
+
+                if (window.MathJax) {
+                    MathJax.typesetPromise([answer])
+                        .catch((err) => console.error(err.message));
+                }
+            }
+
+            let content = document.getElementById("question").value;
+            params = {"content": content}
+
+            fetch("/stream", {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(params)
+            }).then(async result => {
+                const reader = result.body.getReader();
+                const textDecoder = new TextDecoder("utf-8");
+                while(true){
+                    const {done, value} = await reader.read();
+                    if(done) {
+                        return
+                    }
+                    let chunk = textDecoder.decode(value);
+                    jsonObj = JSON.parse(chunk);
+                    // answer.innerHTML += jsonObj['content'].replaceAll("\n", "<br/>");
+                    currentText += jsonObj['content'];
+                    renderMarkdown(currentText);
+                }
+            });
+        }
+
+    </script>
+</head>
+<body>
+  <div id="chatbox">
+      <div class="answer-box">您好，欢迎访问蜗牛学苑AI智能问答系统，我是您的智能助手小牛，你可以问我任何问题，或者让我为您生成或识别图片等，我将尽力帮您解决。 </div>
+  </div>
+  <div id="bottom">
+    <div style="float: left">
+      <textarea id="question">你好,你是谁？</textarea>
+    </div>
+    <div style="float: right; text-align: center; width: 210px">
+      <button id="qa-button" onclick="doAsk()">智能问答</button> <br/>
+    </div>
+  </div>
+</body>
+</html>
