@@ -7,25 +7,22 @@
     <script src="/static/script.js"></script>
     <script>
         document.addEventListener("DOMContentLoaded", () => {
-            if (localStorage.getItem("token") != null) {
-                welcome = document.getElementById("welcome");
-                welcome.innerHTML = "你好，" + localStorage.getItem("realname");
-                welcome.innerHTML += "&nbsp;&nbsp;<a href='#' onclick='doLogout()'>退出</a>";
-            }
+            requireLogin();
+            initExamPage('{{videoid}}');
         });
     </script>
 </head>
 <body>
     <div class="menu">
       <div class="logo">欣鹏AI智慧课堂</div>
-      <div class="login">
-          用户名：<input type="text" id="username">
-          密码：<input type="password" id="password">
-          &nbsp;&nbsp;<button onclick="doLogin()">登录</button>
-      </div>
-      <div id="welcome">
-          <a href="#" onclick="clickLogin()">点击登录</a>
-      </div>
+      <div id="welcome"></div>
+    </div>
+
+    <div class="stats-bar">
+        <span id="exam-progress">进度：0/0</span>
+        <span id="exam-accuracy"></span>
+        <span id="exam-duration">用时：00:00</span>
+        <span id="save-status"></span>
     </div>
 
     <div class="exam-box">

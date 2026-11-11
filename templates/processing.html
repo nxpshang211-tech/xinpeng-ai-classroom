@@ -23,7 +23,10 @@
         <p id="message-{{video.videoid}}">{{video.error_message or video.warning_message or ''}}</p>
     </div>
     <script>
-        document.addEventListener("DOMContentLoaded", startPendingVideoPolling);
+        document.addEventListener("DOMContentLoaded", () => {
+            requireLogin();
+            startPendingVideoPolling();
+        });
     </script>
 </body>
 </html>

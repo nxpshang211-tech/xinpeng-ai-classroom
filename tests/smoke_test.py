@@ -117,14 +117,93 @@ def main() -> None:
 
         with TestClient(app) as client, sample.open("rb") as source:
             assert client.get("/").status_code == 200
+            assert client.get("/login").status_code == 200
+            assert client.get("/register").status_code == 200
+
+            # 注册全流程：查重 -> 注册 -> 重复注册被拒 -> 参数非法被拒 -> 登录
+            check = client.post("/api/username-check", json={"username": "newstu"})
+            assert check.json()["exists"] is False
+            reg = client.post(
+                "/register",
+                json={"username": "newstu", "realname": "新同学", "password": "pass123"},
+            )
+            assert reg.json()["message"] == "register-ok", reg.text
+            check = client.post("/api/username-check", json={"username": "newstu"})
+            assert check.json()["exists"] is True
+            dup = client.post(
+                "/register",
+                json={"username": "newstu", "realname": "x", "password": "pass123"},
+            )
+            assert dup.json()["message"] == "user-exists"
+            bad_name = client.post(
+                "/register",
+                json={"username": "a", "realname": "x", "password": "pass123"},
+            )
+            assert bad_name.json()["message"] == "invalid-username"
+            bad_pwd = client.post(
+                "/register",
+                json={"username": "validname", "realname": "x", "password": "123"},
+            )
+            assert bad_pwd.json()["message"] == "invalid-password"
+
             login = client.post(
-                "/login", json={"username": "student", "password": "student123"}
+                "/login", json={"username": "newstu", "password": "pass123"}
             )
             assert login.json()["message"] == "login-ok"
             token = login.json()["token"]
-            assert client.post("/checklogin", json={"token": token}).json()["message"] == "Token-OK"
+            wrong = client.post("/login", json={"username": "newstu", "password": "bad"})
+            assert wrong.json()["message"] == "login-fail"
+            ghost = client.post("/login", json={"username": "ghost", "password": "x"})
+            assert ghost.json()["message"] == "user-not-exist"
+            checked = client.post("/checklogin", json={"token": token}).json()
+            assert checked["message"] == "Token-OK"
+            assert "role" not in checked  # 角色体系已移除
+            bad = client.post("/checklogin", json={"token": "not-a-token"}).json()
+            assert bad["message"] == "Token-Error"
+
             assert client.get(f"/detail/{videoid}").status_code == 200
             assert client.get(f"/exam/{videoid}").status_code == 200
+
+            with Session(engine) as session:
+                generated = session.exec(select(Exams).where(Exams.videoid == videoid)).all()
+            choice_exam = next(item for item in generated if item.type == "choice")
+            qa_exam = next(item for item in generated if item.type == "qa")
+
+            # 草稿实时保存：未登录拦截、逐题保存、改答案覆盖、刷新后恢复
+            rejected = client.post(
+                f"/exam/draft/{videoid}/bad-token",
+                json={"examid": choice_exam.examid, "answer": "A"},
+            )
+            assert rejected.json() == "Token-Fail"
+            saved = client.post(
+                f"/exam/draft/{videoid}/{token}",
+                json={"examid": choice_exam.examid, "answer": "A"},
+            )
+            assert saved.json()["message"] == "saved"
+            saved = client.post(
+                f"/exam/draft/{videoid}/{token}",
+                json={"examid": qa_exam.examid, "answer": "草稿简答"},
+            )
+            assert saved.json()["message"] == "saved"
+            draft = client.get(f"/exam/draft/{videoid}/{token}").json()
+            assert draft["submitted"] is False
+            assert draft["answers"][str(choice_exam.examid)] == "A"
+            assert draft["answers"][str(qa_exam.examid)] == "草稿简答"
+            client.post(
+                f"/exam/draft/{videoid}/{token}",
+                json={"examid": choice_exam.examid, "answer": "B"},
+            )
+            restored = client.get(f"/exam/draft/{videoid}/{token}").json()
+            assert restored["answers"][str(choice_exam.examid)] == "B"
+            client.post(
+                f"/exam/draft/{videoid}/{token}",
+                json={"examid": choice_exam.examid, "answer": "A"},
+            )
+            ghost_exam = client.post(
+                f"/exam/draft/{videoid}/{token}",
+                json={"examid": 999999, "answer": "A"},
+            )
+            assert ghost_exam.status_code == 404
 
             with Session(engine) as session:
                 generated = session.exec(select(Exams).where(Exams.videoid == videoid)).all()
@@ -146,6 +225,11 @@ def main() -> None:
                     f"/exam/submit/{videoid}/{token}", json=answers
                 )
             assert submitted.json() == 85, submitted.text
+            # 提交后草稿落定：标记已提交、总分与每题得分可回显
+            final = client.get(f"/exam/draft/{videoid}/{token}").json()
+            assert final["submitted"] is True
+            assert final["total"] == 85
+            assert len(final["answers"]) == 11
             repeated = client.post(f"/exam/submit/{videoid}/{token}", json=answers)
             assert repeated.json() == "Already-Exam", repeated.text
 

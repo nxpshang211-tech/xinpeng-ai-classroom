@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
@@ -15,7 +16,7 @@ from fastapi.templating import Jinja2Templates
 from sqlmodel import Session, desc, select
 
 from config import settings
-from model import Exams, Scores, Users, Videos, engine, init_database
+from model import Answers, Exams, Scores, Users, Videos, engine, init_database
 from module import (
     aes_encrypt,
     ai_score,
@@ -90,6 +91,23 @@ def detail(request: Request, videoid: int):
     )
 
 
+def _make_token(user: Users) -> str:
+    expired_time = int(time.time()) + 60 * 60 * 24
+    return aes_encrypt(
+        f"{user.username}|{user.userid}|{user.realname}|{expired_time}"
+    )
+
+
+@app.get("/login")
+def login_page(request: Request):
+    return templates.TemplateResponse(request=request, name="login.html")
+
+
+@app.get("/register")
+def register_page(request: Request):
+    return templates.TemplateResponse(request=request, name="register.html")
+
+
 @app.post("/login")
 def login(logins: dict = Body()):
     username = str(logins.get("username", "")).strip()
@@ -100,12 +118,43 @@ def login(logins: dict = Body()):
         return {"message": "user-not-exist"}
     if user.password != password:
         return {"message": "login-fail"}
+    return {"message": "login-ok", "token": _make_token(user), "realname": user.realname}
 
-    expired_time = int(time.time()) + 60 * 60 * 24
-    token = aes_encrypt(
-        f"{user.username}|{user.userid}|{user.role}|{user.realname}|{expired_time}"
-    )
-    return {"message": "login-ok", "token": token, "realname": user.realname}
+
+USERNAME_PATTERN = re.compile(r"^[A-Za-z0-9_一-龥]{2,20}$")
+
+
+@app.post("/api/username-check")
+def username_check(data: dict = Body()):
+    username = str(data.get("username", "")).strip()
+    with Session(engine) as session:
+        exists = session.exec(select(Users).where(Users.username == username)).first()
+    return {"exists": exists is not None}
+
+
+@app.post("/register")
+def register(data: dict = Body()):
+    username = str(data.get("username", "")).strip()
+    password = str(data.get("password", ""))
+    realname = str(data.get("realname", "")).strip()
+    if not USERNAME_PATTERN.fullmatch(username):
+        return {"message": "invalid-username"}
+    if len(password) < 6:
+        return {"message": "invalid-password"}
+    if not realname:
+        return {"message": "invalid-realname"}
+    with Session(engine) as session:
+        if session.exec(select(Users).where(Users.username == username)).first():
+            return {"message": "user-exists"}
+        user = Users(username=username, password=password, realname=realname)
+        session.add(user)
+        session.commit()
+        session.refresh(user)
+    return {
+        "message": "register-ok",
+        "token": _make_token(user),
+        "realname": user.realname,
+    }
 
 
 @app.post("/checklogin")
@@ -225,13 +274,70 @@ def exam(request: Request, videoid: int):
     )
 
 
+@app.post("/exam/draft/{videoid}/{token}")
+def save_draft(videoid: int, token: str, draft: dict = Body()):
+    token_data = check_token(token)
+    if token_data["message"] != "Token-OK":
+        return "Token-Fail"
+    userid = int(token_data["userid"])
+    examid = int(draft.get("examid", 0))
+    answer = str(draft.get("answer", ""))
+    with Session(engine) as session:
+        exam = session.get(Exams, examid)
+        if exam is None or exam.videoid != videoid:
+            raise HTTPException(status_code=404, detail="题目不存在")
+        row = session.exec(
+            select(Answers).where(
+                Answers.userid == userid, Answers.examid == examid
+            )
+        ).first()
+        if row is None:
+            session.add(Answers(userid=userid, examid=examid, answer=answer))
+        else:
+            row.answer = answer
+            row.updated_at = datetime.now(timezone.utc)
+            session.add(row)
+        session.commit()
+    return {"message": "saved"}
+
+
+@app.get("/exam/draft/{videoid}/{token}")
+def get_draft(videoid: int, token: str):
+    token_data = check_token(token)
+    if token_data["message"] != "Token-OK":
+        return "Token-Fail"
+    userid = int(token_data["userid"])
+    with Session(engine) as session:
+        examids = [
+            exam.examid
+            for exam in session.exec(
+                select(Exams).where(Exams.videoid == videoid)
+            ).all()
+        ]
+        drafts = session.exec(
+            select(Answers).where(
+                Answers.userid == userid, Answers.examid.in_(examids)
+            )
+        ).all()
+        score_rows = session.exec(
+            select(Scores).where(
+                Scores.userid == userid, Scores.videoid == videoid
+            )
+        ).all()
+    scores = {row.examid: row.score for row in score_rows}
+    return {
+        "answers": {row.examid: row.answer for row in drafts},
+        "submitted": bool(score_rows),
+        "scores": scores,
+        "total": sum(scores.values()) if score_rows else None,
+    }
+
+
 @app.post("/exam/submit/{videoid}/{token}")
 def exam_submit(videoid: int, token: str, answers: dict = Body()):
     token_data = check_token(token)
     if token_data["message"] != "Token-OK":
         return "Token-Fail"
-    if token_data.get("role") != "student":
-        return "Not-Student"
     userid = int(token_data["userid"])
 
     with Session(engine) as session:
@@ -297,6 +403,21 @@ def exam_submit(videoid: int, token: str, answers: dict = Body()):
     total_score = sum(item.score for item in pending_scores)
     with Session(engine) as session:
         session.add_all(pending_scores)
+        # 最终答案同步落定为草稿，便于提交后回显
+        for item in pending_scores:
+            row = session.exec(
+                select(Answers).where(
+                    Answers.userid == userid, Answers.examid == item.examid
+                )
+            ).first()
+            if row is None:
+                session.add(
+                    Answers(userid=userid, examid=item.examid, answer=item.answer)
+                )
+            else:
+                row.answer = item.answer
+                row.updated_at = datetime.now(timezone.utc)
+                session.add(row)
         session.commit()
     return total_score
 

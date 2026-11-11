@@ -12,14 +12,9 @@
     <script async src="https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/tex-mml-chtml.js"></script>
 
     <script>
-        // 当文档加载完成后，对登录信息进行判断，并开始渲染Xmind
+        // 校验登录状态并渲染思维导图
         document.addEventListener("DOMContentLoaded", function () {
-            if (localStorage.getItem("token") != null) {
-                welcome = document.getElementById("welcome");
-                welcome.innerHTML = "你好，" + localStorage.getItem("realname");
-                welcome.innerHTML += "&nbsp;&nbsp;<a href='#' onclick='doLogout()'>退出</a>";
-            }
-
+            requireLogin();
             const data = {{ xmind_data|tojson }};
             drawMindMap(data);
         });
@@ -29,14 +24,7 @@
 <body>
     <div class="menu">
       <div class="logo">欣鹏AI智慧课堂</div>
-      <div class="login">
-          用户名：<input type="text" id="username">
-          密码：<input type="password" id="password">
-          &nbsp;&nbsp;<button onclick="doLogin()">登录</button>
-      </div>
-      <div id="welcome">
-          <a href="#" onclick="clickLogin()">点击登录</a>
-      </div>
+      <div id="welcome"></div>
     </div>
 
     <!-- 定义video元素用于对当前视频进行播放，可选功能 -->

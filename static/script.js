@@ -1,6 +1,66 @@
-// 点击登录时，将登录的用户名和密码输入框显示出来
-function clickLogin() {
-    document.getElementsByClassName("login")[0].style.display = "block";
+// 全局登录状态校验：所有业务页面加载时调用
+// 未登录或 Token 无效/过期时立即跳转登录页；已登录则直接放行并显示欢迎语
+function requireLogin() {
+    const token = localStorage.getItem("token");
+    if (token == null) {
+        location.replace("/login");
+        return;
+    }
+    fetch("/checklogin", {
+        method: 'POST',
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({"token": token})
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data["message"] !== "Token-OK") {
+            localStorage.clear();
+            location.replace("/login");
+            return;
+        }
+        const welcome = document.getElementById("welcome");
+        if (welcome) {
+            welcome.innerHTML = "你好，" + data["realname"] +
+                '&nbsp;&nbsp;<a href="#" onclick="doLogout()">退出</a>';
+        }
+    })
+    .catch(err => console.log('登录校验请求失败', err));
+}
+
+// 登录处理，只需要将Token保存到localStorage中
+function doLogin() {
+    const username = document.getElementById("username").value;
+    const password = document.getElementById("password").value;
+    const errorBox = document.getElementById("login-error");
+    fetch("/login", {
+        method: 'POST',
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({"username": username, "password": password})
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data["message"] === "login-ok") {
+            localStorage.setItem("token", data["token"]);
+            localStorage.setItem("realname", data["realname"]);
+            location.href = "/";
+        }
+        else if (data["message"] === "user-not-exist") {
+            errorBox.textContent = "用户名不存在，请先注册";
+        }
+        else {
+            errorBox.textContent = "密码错误，请重试";
+        }
+    })
+    .catch(err => {
+        errorBox.textContent = "网络异常，请稍后重试";
+        console.log('请求失败', err);
+    });
+}
+
+// 退出登录只需要清空浏览器Token，由于后端也未存储Token，所以不需要处理
+function doLogout() {
+    localStorage.clear();
+    location.replace("/login");
 }
 
 // 浏览到视频文件时，将视频文件的文件名填充到视频标题中
@@ -8,38 +68,6 @@ function fillTitle() {
     let title = document.getElementById("file").files[0].name;
     title = title.split(".")[0];
     document.getElementById("title").value = title;
-}
-
-// 登录处理，只需要将Token保存到localStorage中
-function doLogin() {
-    let username = document.getElementById("username").value;
-    let password = document.getElementById("password").value;
-    fetch("/login", {
-        method: 'POST',
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({"username": username, "password": password})
-    })
-    .then(response => response.text())
-    .then(data => {
-        let message = JSON.parse(data)['message'];
-        if (message === "login-ok") {
-            let token = JSON.parse(data)['token'];
-            let realname = JSON.parse(data)['realname'];
-            localStorage.setItem("token", token);
-            localStorage.setItem("realname", realname);
-            location.reload();
-        }
-        else {
-            alert("登录失败或用户名错误.");
-        }
-    })
-    .catch(err => console.log('请求失败', err));
-}
-
-// 退出登录只需要清空浏览器Token，由于后端也未存储Token，所以不需要处理
-function doLogout() {
-    localStorage.clear();
-    location.reload();
 }
 
 // 上传视频，如果上传成功则刷新页面，以显示最新的视频信息
@@ -167,28 +195,175 @@ function drawMindMap(data) {
     jm.expand_all();
 }
 
+/* ==================== 做题模块：实时持久化 ==================== */
+
+// 每道题的防抖计时器，输入停止 500ms 后自动保存
+const draftTimers = {};
+
+// 将单题答案实时保存到后端，失败时自动重试
+function saveDraft(videoid, examid, answer, retries = 3) {
+    const token = localStorage.getItem("token");
+    const indicator = document.getElementById("save-status");
+    if (indicator) indicator.textContent = "保存中...";
+    fetch(`/exam/draft/${videoid}/${token}`, {
+        method: 'POST',
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({"examid": examid, "answer": answer})
+    })
+    .then(async response => {
+        if (!response.ok) throw new Error("save failed");
+        if (indicator) {
+            indicator.textContent = "已保存 " + new Date().toLocaleTimeString();
+        }
+    })
+    .catch(() => {
+        if (retries > 0) {
+            if (indicator) indicator.textContent = "保存失败，正在重试...";
+            window.setTimeout(() => saveDraft(videoid, examid, answer, retries - 1), 2000);
+        } else if (indicator) {
+            indicator.textContent = "保存失败，请检查网络";
+        }
+    });
+}
+
+// 简答题输入防抖：停止输入 500ms 后才发起保存，避免频繁请求
+function debouncedSaveDraft(videoid, examid, answer) {
+    clearTimeout(draftTimers[examid]);
+    draftTimers[examid] = window.setTimeout(
+        () => saveDraft(videoid, examid, answer), 500
+    );
+}
+
+// 统计并展示做题进度：已完成题数 / 总题数
+function updateExamStats() {
+    const totalChoices = new Set(
+        Array.from(document.querySelectorAll('.choice-box input[type="radio"]'))
+            .map(radio => radio.name)
+    ).size;
+    const answeredChoices = new Set(
+        Array.from(document.querySelectorAll('.choice-box input[type="radio"]:checked'))
+            .map(radio => radio.name)
+    ).size;
+    const textareas = Array.from(document.querySelectorAll(".qa-box textarea"));
+    const answeredQas = textareas.filter(t => t.value.trim() !== "").length;
+    const total = totalChoices + textareas.length;
+    const answered = answeredChoices + answeredQas;
+    const progress = document.getElementById("exam-progress");
+    if (progress) progress.textContent = `进度：${answered}/${total}`;
+}
+
+// 答题时长计时：首次进入页面时记录起点，之后每秒刷新
+function startExamTimer(videoid) {
+    const key = `exam-start-${videoid}`;
+    if (localStorage.getItem(key) == null) {
+        localStorage.setItem(key, String(Date.now()));
+    }
+    const start = Number(localStorage.getItem(key));
+    const box = document.getElementById("exam-duration");
+    if (!box) return;
+    const tick = () => {
+        const seconds = Math.floor((Date.now() - start) / 1000);
+        const mm = String(Math.floor(seconds / 60)).padStart(2, "0");
+        const ss = String(seconds % 60).padStart(2, "0");
+        box.textContent = `用时：${mm}:${ss}`;
+    };
+    tick();
+    window.setInterval(tick, 1000);
+}
+
+// 提交后进入回顾模式：锁定所有输入，展示总分与每题得分
+function enterReviewMode(data) {
+    document.querySelectorAll('.choice-box input[type="radio"]').forEach(radio => {
+        radio.disabled = true;
+    });
+    document.querySelectorAll(".qa-box textarea").forEach(t => {
+        t.disabled = true;
+    });
+    const submit = document.getElementById("submit");
+    if (submit) submit.style.display = "none";
+
+    // 在统计栏展示总分与选择题准确率
+    let choiceTotal = 0, choiceCorrect = 0;
+    document.querySelectorAll(".choice-box").forEach(box => {
+        const radio = box.querySelector('input[type="radio"]');
+        if (!radio) return;
+        const examid = radio.name.split("-")[1];
+        choiceTotal += 1;
+        if ((data.scores || {})[examid] === 5) choiceCorrect += 1;
+    });
+    const accuracy = document.getElementById("exam-accuracy");
+    if (accuracy && choiceTotal > 0) {
+        accuracy.textContent = `选择题准确率：${choiceCorrect}/${choiceTotal}`;
+    }
+    const saveStatus = document.getElementById("save-status");
+    if (saveStatus) saveStatus.textContent = `已提交，总分 ${data.total} 分`;
+}
+
+// 考试页初始化：恢复草稿、绑定实时保存、启动统计与计时
+function initExamPage(videoid) {
+    const token = localStorage.getItem("token");
+    fetch(`/exam/draft/${videoid}/${token}`)
+        .then(response => response.json())
+        .then(data => {
+            const answers = data.answers || {};
+            Object.keys(answers).forEach(examid => {
+                const answer = answers[examid];
+                const radio = document.querySelector(
+                    `input[name="choice-${examid}"][value="choice-${examid}-${answer}"]`
+                );
+                if (radio) radio.checked = true;
+                const textarea = document.getElementById(`qa-${examid}`);
+                if (textarea) textarea.value = answer;
+            });
+
+            if (data.submitted) enterReviewMode(data);
+
+            // 绑定实时保存：选项变更立即保存，文本输入防抖保存
+            document.querySelectorAll('.choice-box input[type="radio"]').forEach(radio => {
+                radio.addEventListener("change", () => {
+                    const examid = radio.name.split("-")[1];
+                    saveDraft(videoid, examid, radio.value.split("-")[2]);
+                    updateExamStats();
+                });
+            });
+            document.querySelectorAll(".qa-box textarea").forEach(textarea => {
+                textarea.addEventListener("input", () => {
+                    const examid = textarea.id.split("-")[1];
+                    debouncedSaveDraft(videoid, examid, textarea.value);
+                    updateExamStats();
+                });
+            });
+
+            updateExamStats();
+            startExamTimer(videoid);
+        })
+        .catch(err => console.log('草稿恢复失败', err));
+}
+
+// 提交试卷：先检查完整性，提交成功后进入回顾模式
 function doExam(videoid) {
-    // 检查用户是否已经登录，未登录的情况下不能提交
     const token = localStorage.getItem("token");
     if (token == null) {
-        alert("你还未登录，不能提交试卷");
+        location.replace("/login");
         return false;
     }
 
-    // 遍历页面中所有的已经选中的单选框
-    let radios = document.querySelectorAll('input[type="radio"]:checked');
-    if (radios.length < 8) {
+    const totalChoices = new Set(
+        Array.from(document.querySelectorAll('.choice-box input[type="radio"]'))
+            .map(radio => radio.name)
+    ).size;
+    let radios = document.querySelectorAll('.choice-box input[type="radio"]:checked');
+    if (radios.length < totalChoices) {
         alert("你的选择题似乎未完成.");
         return false;
     }
-    let answers = {};   // 定义JS对象用于保存所有答案
-    let choices = []   // 定义数组用于保存单选结果
+    let answers = {};
+    let choices = [];
     for (const radio of radios) {
         choices.push(radio.value);
     }
-    answers['choices'] = choices;    /// 将单选结果数组赋值给choices这个Key
+    answers['choices'] = choices;
 
-    // 遍历所有文本域，并获取里面的值
     let textareas = document.getElementsByTagName("textarea");
     for (const textarea of textareas) {
         if (textarea.value.trim() === "") {
@@ -205,24 +380,23 @@ function doExam(videoid) {
     document.getElementById("submit").style.backgroundColor = "gray";
     document.getElementById("submit").textContent = "正在提交...";
 
-    // 将答案组合为JSON后提交给后端接口，最终计算出总得分
-    fetch("/exam/submit/"+videoid + "/" + token, {
+    fetch("/exam/submit/" + videoid + "/" + token, {
         method: 'POST',
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify(answers)
     }).then(response => response.text())
     .then(data => {
         if (data.includes("Token-Fail")) {
-            alert("Token检验失败，请确认.");
-        }
-        else if (data.includes("Not-Student")) {
-            alert("非学生角色无法提交试卷.")
+            localStorage.clear();
+            location.replace("/login");
         }
         else if (data.includes("Already-Exam")) {
-            alert("你已经完成过本次考试，请勿重复操作.")
+            alert("你已经完成过本次考试，请勿重复操作.");
+            location.reload();
         }
         else {
             alert("你的本次得分为：" + data + " 分.");
+            location.reload();
         }
     })
     .catch(err => console.log('请求失败', err));

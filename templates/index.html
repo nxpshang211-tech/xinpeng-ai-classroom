@@ -7,41 +7,14 @@
     <script src="/static/script.js"></script>
 
     <script>
-        // 每次加载页面时，都向服务器请求确认Token是否有效，如果无效或过期则显示未登录状态
-        document.addEventListener("DOMContentLoaded", function () {
-            // 先判断localStorage中存在Token，再发送请求给后端确认Token可用
-            if (localStorage.getItem("token") != null) {
-                fetch("/checklogin", {
-                    method: 'POST',
-                    headers: {"Content-Type": "application/json"},
-                    body: JSON.stringify({"token": localStorage.getItem("token")})
-                })
-                .then(response => response.json())
-                .then(data => {
-                    if (data["message"] === "Token-OK") {
-                        welcome = document.getElementById("welcome");
-                        welcome.innerHTML = "你好，" + data["realname"];
-                        welcome.innerHTML += "&nbsp;&nbsp;" +
-                            "<a href='#' onclick='doLogout()'>退出</a>";
-                    }
-                });
-            }
-            // 以上情况都不满足时，则页面中默认显示未登录状态
-        });
+        // 每次加载页面时校验登录状态，未登录则跳转登录页
+        document.addEventListener("DOMContentLoaded", requireLogin);
     </script>
 </head>
 <body>
   <div class="menu">
       <div class="logo">欣鹏AI智慧课堂</div>
-      <!-- 用户登录框默认不显示，点击登录时才显示 -->
-      <div class="login">
-          用户名：<input type="text" id="username">
-          密码：<input type="password" id="password">
-          &nbsp;&nbsp;<button onclick="doLogin()">登录</button>
-      </div>
-      <div id="welcome">
-          <a href="#" onclick="clickLogin()">点击登录</a>
-      </div>
+      <div id="welcome"></div>
   </div>
 
   <div class="upload">

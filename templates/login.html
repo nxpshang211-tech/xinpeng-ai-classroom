@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>登录 - 欣鹏AI智慧课堂</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <script src="/static/script.js"></script>
+</head>
+<body>
+    <div class="menu">
+        <div class="logo">欣鹏AI智慧课堂</div>
+    </div>
+
+    <div class="auth-card">
+        <h2>用户登录</h2>
+        <div class="auth-field">
+            <label>用户名</label>
+            <input type="text" id="username" placeholder="请输入用户名"/>
+        </div>
+        <div class="auth-field">
+            <label>密码</label>
+            <input type="password" id="password" placeholder="请输入密码"/>
+        </div>
+        <div id="login-error" class="error-tip"></div>
+        <button class="auth-button" onclick="doLogin()">登录</button>
+        <div class="auth-link">还没有账号？<a href="/register">立即注册</a></div>
+    </div>
+</body>
+</html>

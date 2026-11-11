@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from sqlalchemy import UniqueConstraint, event
-from sqlmodel import Field, SQLModel, Session, create_engine, select
+from sqlmodel import Field, SQLModel, create_engine
 
 from config import settings
 
@@ -16,7 +16,6 @@ class Users(SQLModel, table=True):
     username: str = Field(index=True)
     password: str
     realname: str
-    role: str
     createtime: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -65,6 +64,21 @@ class Scores(SQLModel, table=True):
     createtime: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
+class Answers(SQLModel, table=True):
+    """做题过程的实时草稿：每次答案变更都会 upsert 到这里。"""
+
+    __table_args__ = (
+        UniqueConstraint("userid", "examid", name="uq_answer_draft"),
+    )
+
+    answerid: Optional[int] = Field(default=None, primary_key=True)
+    userid: Optional[int] = Field(default=None, foreign_key="users.userid", index=True)
+    examid: Optional[int] = Field(default=None, foreign_key="exams.examid", index=True)
+    answer: str
+    createtime: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
 engine = create_engine(
     settings.database_url,
     connect_args={"check_same_thread": False},
@@ -78,25 +92,5 @@ def _enable_sqlite_foreign_keys(dbapi_connection, _connection_record):
     cursor.close()
 
 
-DEMO_USERS = (
-    ("admin", "admin123", "管理员", "admin"),
-    ("teacher", "teacher123", "演示教师", "teacher"),
-    ("student", "student123", "演示学生", "student"),
-)
-
-
 def init_database() -> None:
     SQLModel.metadata.create_all(engine)
-    with Session(engine) as session:
-        for username, password, realname, role in DEMO_USERS:
-            exists = session.exec(select(Users).where(Users.username == username)).first()
-            if exists is None:
-                session.add(
-                    Users(
-                        username=username,
-                        password=password,
-                        realname=realname,
-                        role=role,
-                    )
-                )
-        session.commit()

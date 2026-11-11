@@ -14,18 +14,6 @@
     font-size: 30px;
     text-align: left;
 }
-.menu .login {
-    width: 500px;
-    height: 50px;
-    line-height: 50px;
-    margin-top: 15px;
-    float: left;
-    text-align: center;
-    display: none;
-}
-.menu .login input {
-    width: 100px;
-}
 .menu #welcome {
     width: 200px;
     height: 50px;
@@ -181,4 +169,84 @@ td {
     width: 100%;
     height: 24px;
     margin: 20px 0;
+}
+
+/*登录/注册页样式*/
+.auth-card {
+    width: 400px;
+    margin: 80px auto;
+    padding: 32px 40px;
+    border: solid 1px lightskyblue;
+    border-radius: 8px;
+    text-align: center;
+}
+.auth-card h2 {
+    margin-top: 0;
+}
+.auth-field {
+    margin-bottom: 16px;
+    text-align: left;
+}
+.auth-field label {
+    display: block;
+    margin-bottom: 6px;
+    font-weight: bold;
+}
+.auth-field input {
+    width: 100%;
+    height: 34px;
+    padding: 0 8px;
+    border: solid 1px darkgrey;
+    border-radius: 4px;
+    box-sizing: border-box;
+}
+.field-tip {
+    min-height: 18px;
+    font-size: 12px;
+    margin-top: 4px;
+}
+.tip-ok {
+    color: darkgreen;
+}
+.tip-err {
+    color: #b42318;
+}
+.error-tip {
+    min-height: 20px;
+    color: #b42318;
+    margin-bottom: 8px;
+}
+.auth-button {
+    width: 100%;
+    height: 40px;
+    font-size: 16px;
+    background-color: darkgreen;
+    color: whitesmoke;
+    border: 0;
+    border-radius: 4px;
+    cursor: pointer;
+}
+.auth-button:disabled {
+    background-color: gray;
+    cursor: not-allowed;
+}
+.auth-link {
+    margin-top: 16px;
+    font-size: 14px;
+}
+
+/*考试页统计栏样式*/
+.stats-bar {
+    width: 1200px;
+    margin: 10px auto;
+    padding: 10px 16px;
+    border: solid 1px lightskyblue;
+    border-radius: 8px;
+    box-sizing: border-box;
+    display: flex;
+    justify-content: space-between;
+    color: #333;
+}
+#save-status {
+    color: darkgreen;
 }

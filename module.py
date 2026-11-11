@@ -41,14 +41,13 @@ def aes_decrypt(encrypted: str) -> str:
 
 def check_token(token: str) -> dict[str, str]:
     try:
-        username, userid, role, realname, expired_time = aes_decrypt(token).split("|")
+        username, userid, realname, expired_time = aes_decrypt(token).split("|")
         if int(time.time()) > int(expired_time):
             return {"message": "Token-Expired"}
         return {
             "message": "Token-OK",
             "username": username,
             "userid": userid,
-            "role": role,
             "realname": realname,
         }
     except (ValueError, TypeError, IndexError, UnicodeError):

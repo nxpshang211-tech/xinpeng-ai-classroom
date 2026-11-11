@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>注册 - 欣鹏AI智慧课堂</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <script src="/static/script.js"></script>
+    <script>
+        const USERNAME_PATTERN = /^[A-Za-z0-9_一-龥]{2,20}$/;
+        let usernameAvailable = false;
+
+        function showTip(id, message, ok) {
+            const tip = document.getElementById(id);
+            tip.textContent = message;
+            tip.className = ok ? "field-tip tip-ok" : "field-tip tip-err";
+        }
+
+        // 用户名：实时格式校验 + 失焦时向服务端查重
+        function validateUsername(checkRemote = false) {
+            const username = document.getElementById("reg-username").value.trim();
+            usernameAvailable = false;
+            if (!USERNAME_PATTERN.test(username)) {
+                showTip("tip-username", "2-20位，仅限中英文、数字和下划线", false);
+                return;
+            }
+            if (!checkRemote) {
+                showTip("tip-username", "", true);
+                return;
+            }
+            fetch("/api/username-check", {
+                method: 'POST',
+                headers: {"Content-Type": "application/json"},
+                body: JSON.stringify({"username": username})
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data["exists"]) {
+                    showTip("tip-username", "该用户名已被注册", false);
+                } else {
+                    usernameAvailable = true;
+                    showTip("tip-username", "用户名可用", true);
+                }
+            })
+            .catch(err => console.log('查重请求失败', err));
+        }
+
+        function validateRealname() {
+            const realname = document.getElementById("reg-realname").value.trim();
+            showTip("tip-realname", realname ? "" : "姓名不能为空", !!realname);
+        }
+
+        function validatePassword() {
+            const password = document.getElementById("reg-password").value;
+            showTip("tip-password", password.length >= 6 ? "" : "密码至少 6 位", password.length >= 6);
+            validateConfirm();
+        }
+
+        function validateConfirm() {
+            const password = document.getElementById("reg-password").value;
+            const confirm = document.getElementById("reg-confirm").value;
+            if (confirm === "") {
+                showTip("tip-confirm", "", true);
+                return;
+            }
+            showTip("tip-confirm", password === confirm ? "" : "两次输入的密码不一致", password === confirm);
+        }
+
+        function doRegister() {
+            const errorBox = document.getElementById("register-error");
+            const button = document.getElementById("register-button");
+            const username = document.getElementById("reg-username").value.trim();
+            const realname = document.getElementById("reg-realname").value.trim();
+            const password = document.getElementById("reg-password").value;
+            const confirm = document.getElementById("reg-confirm").value;
+
+            errorBox.textContent = "";
+            if (!USERNAME_PATTERN.test(username)) {
+                errorBox.textContent = "用户名格式不正确";
+                return;
+            }
+            if (!usernameAvailable) {
+                errorBox.textContent = "请先确认用户名可用";
+                return;
+            }
+            if (!realname) {
+                errorBox.textContent = "姓名不能为空";
+                return;
+            }
+            if (password.length < 6) {
+                errorBox.textContent = "密码至少 6 位";
+                return;
+            }
+            if (password !== confirm) {
+                errorBox.textContent = "两次输入的密码不一致";
+                return;
+            }
+
+            button.disabled = true;
+            button.textContent = "正在注册...";
+            fetch("/register", {
+                method: 'POST',
+                headers: {"Content-Type": "application/json"},
+                body: JSON.stringify({
+                    "username": username,
+                    "realname": realname,
+                    "password": password
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data["message"] === "register-ok") {
+                    // 注册成功即自动登录并进入系统
+                    localStorage.setItem("token", data["token"]);
+                    localStorage.setItem("realname", data["realname"]);
+                    button.textContent = "注册成功，正在进入...";
+                    location.href = "/";
+                }
+                else if (data["message"] === "user-exists") {
+                    errorBox.textContent = "该用户名已被注册";
+                    button.disabled = false;
+                    button.textContent = "注册";
+                }
+                else {
+                    errorBox.textContent = "注册信息不合法，请检查后重试";
+                    button.disabled = false;
+                    button.textContent = "注册";
+                }
+            })
+            .catch(err => {
+                errorBox.textContent = "网络异常，请稍后重试";
+                button.disabled = false;
+                button.textContent = "注册";
+                console.log('请求失败', err);
+            });
+        }
+    </script>
+</head>
+<body>
+    <div class="menu">
+        <div class="logo">欣鹏AI智慧课堂</div>
+    </div>
+
+    <div class="auth-card">
+        <h2>用户注册</h2>
+        <div class="auth-field">
+            <label>用户名</label>
+            <input type="text" id="reg-username" placeholder="2-20位中英文、数字或下划线"
+                   oninput="validateUsername(false)" onblur="validateUsername(true)"/>
+            <div id="tip-username" class="field-tip"></div>
+        </div>
+        <div class="auth-field">
+            <label>姓名</label>
+            <input type="text" id="reg-realname" placeholder="请输入真实姓名" onblur="validateRealname()"/>
+            <div id="tip-realname" class="field-tip"></div>
+        </div>
+        <div class="auth-field">
+            <label>密码</label>
+            <input type="password" id="reg-password" placeholder="至少 6 位" oninput="validatePassword()"/>
+            <div id="tip-password" class="field-tip"></div>
+        </div>
+        <div class="auth-field">
+            <label>确认密码</label>
+            <input type="password" id="reg-confirm" placeholder="再次输入密码" oninput="validateConfirm()"/>
+            <div id="tip-confirm" class="field-tip"></div>
+        </div>
+        <div id="register-error" class="error-tip"></div>
+        <button id="register-button" class="auth-button" onclick="doRegister()">注册</button>
+        <div class="auth-link">已有账号？<a href="/login">返回登录</a></div>
+    </div>
+</body>
+</html>
