@@ -43,7 +43,7 @@ def main() -> None:
         filename = "mock.mp4"
         (settings.static_dir / "videos" / filename).write_bytes(b"mock")
         with Session(engine) as session:
-            video = Videos(videotitle="模拟课程", filename=filename, coursename="测试")
+            video = Videos(videotitle="模拟课程", filename=filename)
             session.add(video)
             session.commit()
             session.refresh(video)
@@ -151,7 +151,7 @@ def main() -> None:
 
             response = client.post(
                 "/upload",
-                data={"title": "无Key测试", "course": "测试课程"},
+                data={"title": "无Key测试"},
                 files={"file": (sample.name, source, "video/mp4")},
             )
             assert response.status_code == 202, response.text

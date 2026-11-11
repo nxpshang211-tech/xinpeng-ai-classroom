@@ -56,10 +56,6 @@
 .upload div:nth-child(2) {
     width: 260px;
 }
-.upload div:nth-child(3) {
-    width: 220px;
-    text-align: right;
-}
 .upload div:last-child {
     width: 160px;
     margin-top: 15px;

@@ -116,13 +116,12 @@ def checklogin(token_data: dict = Body()):
 @app.post("/upload", status_code=202)
 async def upload(
     title: str = Form(),
-    course: str = Form(),
     file: UploadFile = File(),
 ):
     if Path(file.filename or "").suffix.lower() != ".mp4":
         raise HTTPException(status_code=400, detail="目前只支持 MP4 视频")
-    if not title.strip() or not course.strip():
-        raise HTTPException(status_code=400, detail="视频标题和课程不能为空")
+    if not title.strip():
+        raise HTTPException(status_code=400, detail="视频标题不能为空")
 
     filename = datetime.now().strftime("%Y%m%d_%H%M%S_%f.mp4")
     output = settings.static_dir / "videos" / filename
@@ -148,7 +147,6 @@ async def upload(
         video = Videos(
             videotitle=title.strip(),
             filename=filename,
-            coursename=course.strip(),
             status="queued",
             stage="uploaded",
             progress=0,

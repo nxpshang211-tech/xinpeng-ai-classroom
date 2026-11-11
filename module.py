@@ -18,13 +18,10 @@ from Crypto.Util.Padding import pad, unpad
 from dashscope import MultiModalConversation
 from sqlmodel import Session, select
 
-try:
-    from moviepy import AudioFileClip, VideoFileClip
-except ImportError:  # MoviePy 1.x
-    from moviepy.editor import AudioFileClip, VideoFileClip
+from moviepy.editor import AudioFileClip, VideoFileClip
 
 from config import settings
-from model import Exams, Scores, Videos, engine
+from model import Exams, Videos, engine
 
 
 class PipelineError(RuntimeError):
@@ -185,7 +182,7 @@ def video_audio(filename: str) -> dict[str, Any]:
             ffmpeg_params=["-ac", "1"],
             logger=None,
         )
-        return {"audio_name": audio_path.name, "duration": float(clip.duration)}
+        return {"duration": float(clip.duration)}
     finally:
         clip.close()
 
@@ -603,20 +600,6 @@ def ai_score(user_answer: str, question: str, ai_answer: str) -> int:
     if not 0 <= score <= 20:
         raise PipelineError(f"简答题评分超出 0-20：{score}")
     return score
-
-
-def insert_score(userid: int, videoid: int, examid: int, answer: str, score: int) -> None:
-    with Session(engine) as session:
-        session.add(
-            Scores(
-                userid=userid,
-                videoid=videoid,
-                examid=examid,
-                answer=answer,
-                score=score,
-            )
-        )
-        session.commit()
 
 
 def _update_video(videoid: int, **values: Any) -> None:

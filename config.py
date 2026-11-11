@@ -25,9 +25,7 @@ class Settings:
     database_url: str = _env(
         "DATABASE_URL", f"sqlite:///{(BASE_DIR / 'data' / 'course.db').as_posix()}"
     )
-    dashscope_api_key: str = _env(
-        "DASHSCOPE_API_KEY", _env("Dashscope_API_Key")
-    )
+    dashscope_api_key: str = _env("DASHSCOPE_API_KEY")
     dashscope_asr_model: str = _env("DASHSCOPE_ASR_MODEL", "qwen3-asr-flash")
     dashscope_text_model: str = _env("DASHSCOPE_TEXT_MODEL", "qwen-flash")
     dashscope_asr_transport: str = _env("DASHSCOPE_ASR_TRANSPORT", "base64")
@@ -41,9 +39,7 @@ class Settings:
     dashscope_asr_max_mb: int = int(_env("DASHSCOPE_ASR_MAX_MB", "9"))
     dashscope_asr_retries: int = int(_env("DASHSCOPE_ASR_RETRIES", "5"))
 
-    aliyun_search_api_key: str = _env(
-        "ALIYUN_SEARCH_API_KEY", _env("Aliyun_Search_Key")
-    )
+    aliyun_search_api_key: str = _env("ALIYUN_SEARCH_API_KEY")
     aliyun_search_endpoint: str = _env("ALIYUN_SEARCH_ENDPOINT")
     max_upload_mb: int = int(_env("MAX_UPLOAD_MB", "500"))
 

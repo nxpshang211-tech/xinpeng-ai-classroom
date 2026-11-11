@@ -25,7 +25,6 @@ class Videos(SQLModel, table=True):
     videotitle: str
     filename: str
     duration: Optional[float] = None
-    coursename: str
     content: Optional[str] = None
     summary: Optional[str] = None
     keyword: Optional[str] = None

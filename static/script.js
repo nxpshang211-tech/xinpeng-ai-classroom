@@ -54,7 +54,6 @@ function doUpload(obj) {
     obj.textContent = "正在上传...";
     let formData = new FormData();
     formData.append("title", document.getElementById("title").value);
-    formData.append("course", document.getElementById("course").value);
     formData.append("file", fileInput.files[0]);
     fetch('/upload', {
         method: 'POST',
@@ -206,9 +205,6 @@ function doExam(videoid) {
     document.getElementById("submit").style.backgroundColor = "gray";
     document.getElementById("submit").textContent = "正在提交...";
 
-    // console.log(answers);
-    // return false;
-
     // 将答案组合为JSON后提交给后端接口，最终计算出总得分
     fetch("/exam/submit/"+videoid + "/" + token, {
         method: 'POST',
@@ -218,9 +214,6 @@ function doExam(videoid) {
     .then(data => {
         if (data.includes("Token-Fail")) {
             alert("Token检验失败，请确认.");
-        }
-        else if (data.includes("Need-Login")) {
-            alert("请先登录学生账号.");
         }
         else if (data.includes("Not-Student")) {
             alert("非学生角色无法提交试卷.")
