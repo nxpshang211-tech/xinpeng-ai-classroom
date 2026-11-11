@@ -278,24 +278,25 @@ def main() -> None:
             assert check.json()["exists"] is False
             reg = client.post(
                 "/register",
-                json={"username": "newstu", "realname": "新同学", "password": "pass123"},
+                json={"username": "newstu", "password": "pass123"},
             )
             assert reg.json()["message"] == "register-ok", reg.text
+            assert reg.json()["username"] == "newstu"  # 注册不再需要姓名
             check = client.post("/api/username-check", json={"username": "newstu"})
             assert check.json()["exists"] is True
             dup = client.post(
                 "/register",
-                json={"username": "newstu", "realname": "x", "password": "pass123"},
+                json={"username": "newstu", "password": "pass123"},
             )
             assert dup.json()["message"] == "user-exists"
             bad_name = client.post(
                 "/register",
-                json={"username": "a", "realname": "x", "password": "pass123"},
+                json={"username": "a", "password": "pass123"},
             )
             assert bad_name.json()["message"] == "invalid-username"
             bad_pwd = client.post(
                 "/register",
-                json={"username": "validname", "realname": "x", "password": "123"},
+                json={"username": "validname", "password": "123"},
             )
             assert bad_pwd.json()["message"] == "invalid-password"
 
@@ -303,6 +304,7 @@ def main() -> None:
                 "/login", json={"username": "newstu", "password": "pass123"}
             )
             assert login.json()["message"] == "login-ok"
+            assert login.json()["username"] == "newstu"
             token = login.json()["token"]
             wrong = client.post("/login", json={"username": "newstu", "password": "bad"})
             assert wrong.json()["message"] == "login-fail"

@@ -135,7 +135,7 @@ def login(logins: dict = Body()):
         return {"message": "user-not-exist"}
     if user.password != password:
         return {"message": "login-fail"}
-    return {"message": "login-ok", "token": _make_token(user), "realname": user.realname}
+    return {"message": "login-ok", "token": _make_token(user), "username": user.username}
 
 
 USERNAME_PATTERN = re.compile(r"^[A-Za-z0-9_一-龥]{2,20}$")
@@ -153,24 +153,21 @@ def username_check(data: dict = Body()):
 def register(data: dict = Body()):
     username = str(data.get("username", "")).strip()
     password = str(data.get("password", ""))
-    realname = str(data.get("realname", "")).strip()
     if not USERNAME_PATTERN.fullmatch(username):
         return {"message": "invalid-username"}
     if len(password) < 6:
         return {"message": "invalid-password"}
-    if not realname:
-        return {"message": "invalid-realname"}
     with Session(engine) as session:
         if session.exec(select(Users).where(Users.username == username)).first():
             return {"message": "user-exists"}
-        user = Users(username=username, password=password, realname=realname)
+        user = Users(username=username, password=password)
         session.add(user)
         session.commit()
         session.refresh(user)
     return {
         "message": "register-ok",
         "token": _make_token(user),
-        "realname": user.realname,
+        "username": user.username,
     }
 
 
