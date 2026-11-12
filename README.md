@@ -13,7 +13,7 @@
 - **课堂笔记**：转写文本经 qwen-flash 整理为结构化 HTML 笔记
 - **思维导图**：自动生成 XMind 文件，前端 jsMind 渲染展示
 - **关键帧**：OpenCV 场景检测抽帧，还原课件画面
-- **扩展资料**（可选）：配置阿里云搜索后自动补充延伸阅读；未配置时自动跳过，不影响其他步骤
+- **扩展资料**：由文本模型根据课程主题生成延伸阅读方向，并给出可直接打开的搜索链接
 - **失败可重试**：流水线任一环节失败均记录进度，修复后一键重试，无需重新上传
 
 ### 课后习题（纯客观题）
@@ -82,7 +82,6 @@ DASHSCOPE_API_KEY=你的百炼API-Key
 | `DASHSCOPE_ASR_TRANSPORT` | `base64` | ASR 传输方式，改 `oss` 恢复 SDK 临时 OSS 上传 |
 | `DASHSCOPE_ASR_CHUNK_SECONDS` | `285` | ASR 切片时长（秒） |
 | `DASHSCOPE_ASR_RETRIES` | `5` | 每段 ASR 最大重试次数 |
-| `ALIYUN_SEARCH_API_KEY` / `ALIYUN_SEARCH_ENDPOINT` | 空 | 扩展资料搜索，留空自动跳过 |
 | `DATABASE_URL` | `sqlite:///./data/course.db` | 数据库连接 |
 | `MAX_UPLOAD_MB` | `500` | 单视频上传大小上限（MB） |
 | `MULTI_PARTIAL_CREDIT` | `true` | 多选题漏选半分策略 |

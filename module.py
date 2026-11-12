@@ -7,6 +7,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import quote
 
 import cv2
 import numpy as np
@@ -723,22 +724,63 @@ def insert_exam(examtext: str, videoid: int) -> None:
 
 
 def gen_reference(keyword: str) -> list[dict[str, Any]]:
-    if not settings.aliyun_search_api_key or not settings.aliyun_search_endpoint:
-        raise PipelineError("未配置阿里云搜索 Key 或 Endpoint，已跳过扩展资料")
-    response = requests.post(
-        settings.aliyun_search_endpoint,
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {settings.aliyun_search_api_key}",
-        },
-        json={"query": keyword, "top_k": 4},
-        timeout=30,
+    """用文本模型生成延伸阅读方向，链接拼接为可访问的搜索页。"""
+    system_prompt = (
+        "你是课程助教，负责为学员推荐课后延伸阅读方向。"
+        "只返回 JSON，不要输出解释或 Markdown 标记。"
     )
-    response.raise_for_status()
-    result = response.json().get("result", {}).get("search_result", [])
-    if not isinstance(result, list):
-        raise PipelineError("搜索接口返回结构不正确")
-    return result
+    user_prompt = f"""
+根据课程核心主题「{keyword}」，推荐 4 个值得延伸阅读的具体方向。
+
+要求：
+1. 每条包含 title（阅读方向名称，15 字内）和 query（检索关键词，20 字内）。
+2. 内容贴合课堂主题，偏向概念深化、经典案例或实践应用。
+3. 不要输出网址。
+
+返回 JSON 格式：
+{{"items": [{{"title": "...", "query": "..."}}]}}
+"""
+
+    def validate(data: dict[str, Any]) -> None:
+        items = data.get("items")
+        if not isinstance(items, list):
+            raise ValueError("items 必须是数组")
+        if not any(
+            isinstance(item, dict)
+            and str(item.get("title", "")).strip()
+            and str(item.get("query", "")).strip()
+            for item in items
+        ):
+            raise ValueError("items 为空或缺少 title/query")
+
+    data = _generate_json(system_prompt, user_prompt, validate)
+    references: list[dict[str, Any]] = []
+    for item in data["items"]:
+        if not isinstance(item, dict):
+            continue
+        title = str(item.get("title", "")).strip()
+        query = str(item.get("query", "")).strip()
+        if not title or not query:
+            continue
+        references.append(
+            {
+                "title": title,
+                "link": f"https://www.baidu.com/s?wd={quote(query)}",
+            }
+        )
+    if not references:
+        raise PipelineError("模型未给出有效的延伸阅读方向")
+    return references[:4]
+
+
+def _write_jpeg(frame: np.ndarray, output: Path) -> None:
+    """用 imencode + tofile 写图，规避 OpenCV imwrite 对中文绝对路径失败的问题。"""
+    ok, buffer = cv2.imencode(".jpg", frame)
+    if not ok:
+        raise PipelineError(f"关键帧编码失败：{output.name}")
+    buffer.tofile(str(output))
+    if not output.is_file() or output.stat().st_size == 0:
+        raise PipelineError(f"关键帧写入失败：{output.name}")
 
 
 def gen_key_frames(filepath: str | Path) -> list[Path]:
@@ -772,7 +814,7 @@ def gen_key_frames(filepath: str | Path) -> list[Path]:
         following = cv2.cvtColor(sampled_frames[index + 1], cv2.COLOR_BGR2GRAY)
         if float(np.average(cv2.absdiff(previous, following))) > 0.8:
             output = staging / f"{index}.jpg"
-            cv2.imwrite(str(output), sampled_frames[index + 1])
+            _write_jpeg(sampled_frames[index + 1], output)
             written.append(output)
 
     marker_in_staging = staging / ".complete"

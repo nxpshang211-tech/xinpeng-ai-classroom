@@ -147,7 +147,7 @@ def main() -> None:
             patch.object(
                 service,
                 "gen_reference",
-                side_effect=service.PipelineError("未配置搜索，已跳过"),
+                side_effect=service.PipelineError("延伸阅读生成失败，已跳过"),
             ),
             patch.object(
                 service,
@@ -767,6 +767,34 @@ def main() -> None:
             assert captured["url"] == "https://api.deepseek.com/v1/chat/completions"
             assert captured["payload"]["model"] == "deepseek-chat"
             print("ai settings: OK")
+
+            # 延伸阅读：由文本模型生成主题，链接拼为可访问的搜索页
+            def fake_reference_model(_system_prompt, _user_prompt):
+                return json.dumps(
+                    {
+                        "items": [
+                            {"title": "概念深化", "query": "注意力机制 原理"},
+                            {"title": "经典案例", "query": "Transformer 应用案例"},
+                        ]
+                    },
+                    ensure_ascii=False,
+                )
+
+            with patch.object(
+                service, "_call_text_model", side_effect=fake_reference_model
+            ):
+                refs = service.gen_reference("注意力机制")
+            assert len(refs) == 2
+            assert refs[0]["title"] == "概念深化"
+            assert refs[0]["link"].startswith("https://www.baidu.com/s?wd=")
+            # 模型返回非法 JSON 时整体失败，由流水线降级为 warning
+            with patch.object(service, "_call_text_model", return_value="not-json"):
+                try:
+                    service.gen_reference("x")
+                    raise AssertionError("非法 JSON 应抛 PipelineError")
+                except service.PipelineError:
+                    pass
+            print("reference generation: OK")
 
             response = client.post(
                 "/upload",

@@ -39,8 +39,6 @@ class Settings:
     dashscope_asr_max_mb: int = int(_env("DASHSCOPE_ASR_MAX_MB", "9"))
     dashscope_asr_retries: int = int(_env("DASHSCOPE_ASR_RETRIES", "5"))
 
-    aliyun_search_api_key: str = _env("ALIYUN_SEARCH_API_KEY")
-    aliyun_search_endpoint: str = _env("ALIYUN_SEARCH_ENDPOINT")
     max_upload_mb: int = int(_env("MAX_UPLOAD_MB", "500"))
 
     # 多选题给分策略：true=漏选半分、错选零分；false=全对才得分
